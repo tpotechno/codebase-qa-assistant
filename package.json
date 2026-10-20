@@ -1,16 +1,18 @@
 {
   "name": "codebase-qa-assistant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Codebase Q&A and PR Review Assistant built on the Claude API, with a custom MCP server",
   "scripts": {
     "ask": "tsx src/index.ts",
+    "review": "tsx src/review-cli.ts",
     "serve": "tsx src/serve.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.304",
     "@anthropic-ai/sdk": "^0.135.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "dotenv": "^17.0.0",

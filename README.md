@@ -1,13 +1,14 @@
 # Codebase Q&A and PR Review Assistant
 
-An agentic assistant built on the Claude API that answers questions about a codebase, grounded in the actual code and docs. Its tools are served by a custom **MCP server** over Streamable HTTP, so the same tools work for this app, Claude Code, and any other MCP client.
+An agentic assistant built on the Claude API that answers questions about a codebase and reviews GitHub pull requests, grounded in the actual code and docs. Its tools are served by a custom **MCP server** over Streamable HTTP, so the same tools work for this app, Claude Code, and any other MCP client.
 
-**Stack:** TypeScript / Node, Claude API (`@anthropic-ai/sdk`), Model Context Protocol (`@modelcontextprotocol/sdk`), Express. Angular front end in Phase 4.
+**Stack:** TypeScript / Node, Claude API (`@anthropic-ai/sdk`), Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`), Model Context Protocol (`@modelcontextprotocol/sdk`), GitHub REST API, Express. Angular front end in Phase 4.
 
 ## Status
 
 - **Phase 1 — complete.** Hand-written Messages API tool loop.
 - **Phase 2 — complete.** Custom MCP server (Streamable HTTP) with code search, file reading, and documentation retrieval; the agent discovers its tools from the server at runtime.
+- **Phase 3 — complete.** Pull-request review: GitHub PR tools on the MCP server, and a `review` command orchestrated by the Claude Agent SDK that returns a structured, line-anchored review and can publish it to GitHub.
 
 ### Tools
 
@@ -16,8 +17,11 @@ An agentic assistant built on the Claude API that answers questions about a code
 | `search_code` | Case-insensitive search across text files; returns `file:line` hits with context, capped at `k` |
 | `read_file` | Reads a file with line numbers, 200 lines per call; refuses any path outside the repo root |
 | `search_docs` | Retrieval over READMEs, design docs, and ADRs: heading-aware chunking + BM25 ranking, returns cited passages |
+| `get_pr` | A GitHub PR's title, description, author, branches, head commit, and changed files with line counts |
+| `get_pr_diff` | The PR diff with new-file line numbers in a gutter, paged at ~24k characters; one file at a time with `path`. Lockfiles and minified bundles are collapsed unless requested by `path` |
+| `post_review` | Publishes a review as a single **COMMENT** (never approve or request changes). Off unless enabled; see below |
 
-All three are marked read-only (`readOnlyHint`), validate their inputs with zod schemas, and return compact output to keep context and token use down.
+Every tool validates its inputs with zod schemas and returns compact output to keep context and token use down. All but `post_review` are marked read-only (`readOnlyHint`).
 
 ## Quick start (Windows / PowerShell)
 
@@ -44,13 +48,42 @@ npm run ask -- "Why does the server refuse to bind to 0.0.0.0 without a token?"
 # Tools: mcp:http://127.0.0.1:3333/mcp
 ```
 
+### Reviewing a pull request
+
+```powershell
+npm run review -- tpotechno/codebase-qa-assistant#1
+# or a URL:  npm run review -- https://github.com/owner/repo/pull/123
+```
+
+The review agent reads the PR, pages through the whole diff, looks up surrounding code with the repo tools when it needs context, and prints a review:
+
+```
+## AI review: owner/repo#123
+
+**Verdict:** Minor issues (1 blocker, 2 suggestions)
+
+<summary>
+
+### Comments
+- **blocker** `src/server.ts:42` — PORT may be unset; Number(undefined) is NaN. Default to 3000.
+...
+[9 turn(s), $0.0812, 41.3s]
+```
+
+- **Draft by default.** Nothing is posted unless you add `--post`. `--out review.md` also saves it to a file.
+- **Publishing:** `npm run review -- owner/repo#123 --post` posts the summary plus inline comments on the exact lines. Comments that land outside the diff are moved into the summary instead of failing the review.
+- **One terminal.** If `MCP_SERVER_URL` isn't set, the command starts a private MCP server in-process on a random port with a one-time token.
+- **Spend cap.** Each review stops at `REVIEW_MAX_BUDGET_USD` (default $1.00).
+
+**GitHub token.** Public PRs work without one (GitHub allows 60 unauthenticated requests per hour). For private repos, higher limits, or `--post`, create a fine-grained token at github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens, limited to the repositories you want reviewed, with **Pull requests: Read and write** and **Contents: Read-only**. Put it in `.env` as `GITHUB_TOKEN=`.
+
 ### Using the MCP server from Claude Code
 
 With the server running:
 ```powershell
 claude mcp add --transport http codebase-qa http://127.0.0.1:3333/mcp
 ```
-Claude Code can then call `search_code`, `read_file`, and `search_docs` against your repo.
+Claude Code can then call the repo tools and the PR tools, e.g. "use codebase-qa to summarize the risky parts of PR #12".
 
 ### Server configuration
 
@@ -60,12 +93,17 @@ Claude Code can then call `search_code`, `read_file`, and `search_docs` against 
 | `MCP_PORT` | `3333` | Port to listen on |
 | `MCP_HOST` | `127.0.0.1` | Bind address; local-only by default, with DNS-rebinding protection |
 | `MCP_AUTH_TOKEN` | — | If set, clients must send `Authorization: Bearer <token>`. **Required** for any non-local host |
+| `GITHUB_TOKEN` | — | GitHub token for the PR tools (private repos, higher rate limits, posting) |
+| `GITHUB_ALLOW_POST` | `false` | Set `true` to register `post_review` on a standalone server (also needs `GITHUB_TOKEN`). `npm run review --post` enables it on its embedded server automatically |
+| `REVIEW_MAX_BUDGET_USD` | `1` | Spend cap per review |
 
 `GET /health` returns server name and version without auth, for uptime checks.
 
 ### Troubleshooting
 
 - **`401 invalid x-api-key`** — the key was rejected. Values in `.env` take priority over Windows environment variables, so check the `.env` line is exactly `ANTHROPIC_API_KEY=sk-ant-...` (no quotes or spaces), or create a new key in the Console.
+- **`GitHub 404` / `GitHub 403`** on a PR — the PR is private or you hit the unauthenticated rate limit; set `GITHUB_TOKEN`.
+- **`Review failed: spend cap ... reached`** — raise `REVIEW_MAX_BUDGET_USD` for very large PRs.
 - **`Could not connect to MCP server`** — start it with `npm run serve` in another terminal, or remove `MCP_SERVER_URL` from `.env` to use local tools.
 - **`npm.ps1 cannot be loaded ... not digitally signed`** — run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `npm.cmd` instead of `npm`.
 - **npm 12 `install-scripts` warning for esbuild** — run `npm install-scripts approve esbuild`, then `npm install`.
@@ -77,7 +115,7 @@ npm run typecheck
 npm test
 ```
 
-17 tests, no API key needed. They cover the tools directly, document chunking and ranking, and the MCP server over real HTTP: tool discovery, schema validation, path-traversal refusal, bearer-token auth, and the full agent loop running against the server with a scripted fake Claude client.
+The tests need no API key or network. They cover the tools directly, document chunking and ranking, the MCP server over real HTTP (tool discovery, schema validation, path-traversal refusal, bearer-token auth), the GitHub client against an in-memory fake GitHub API (paging, error hints, diff line mapping, folding out-of-diff comments), the review agent against a scripted Agent SDK message stream (read-only tool allowlist, spend cap, error handling), and the full agent loop running against the server with a scripted fake Claude client.
 
 ## Architecture
 
@@ -85,13 +123,14 @@ npm test
 ┌──────────────────────────────────────────────┐
 │  Angular front end (chat UI + streaming)      │  Phase 4
 ├──────────────────────────────────────────────┤
-│  Agent (src/agent.ts) — Messages API loop     │  Phase 1 → Agent SDK in Phase 3
-│    └─ ToolProvider: local | MCP client        │  Phase 2
+│  ask:    src/agent.ts — hand-written loop     │  Phase 1–2
+│            └─ ToolProvider: local | MCP       │
+│  review: src/review.ts — Claude Agent SDK     │  Phase 3
 ├──────────────────────────────────────────────┤
-│  MCP server (src/mcp-server.ts)               │  Phase 2
+│  MCP server (src/mcp-server.ts)               │  Phase 2–3
 │    Streamable HTTP · stateless · bearer auth  │
 ├──────────────────────────────────────────────┤
-│  Data: repo files + doc index (BM25)          │  Phase 2
+│  Data: repo files · doc index (BM25) · GitHub │  Phase 2–3
 └──────────────────────────────────────────────┘
 ```
 
@@ -102,11 +141,14 @@ Full design write-up: [docs/mcp_server_design.md](docs/mcp_server_design.md) ([P
 - **Client-side MCP.** The agent connects to the server with the MCP client SDK, lists its tools, and translates them into Messages API tool definitions. This works against a server on `localhost`. (The Messages API's built-in MCP connector needs a publicly reachable server, which fits the hosted deployment in Phase 5.)
 - **Pluggable tool source.** The agent loop depends only on a `ToolProvider` interface, so in-process tools and MCP tools are interchangeable — and new server tools reach the agent with no agent code change.
 - **Stateless server.** Each request gets a fresh server and transport, so it can scale horizontally behind a load balancer.
+- **Two orchestration styles, on purpose.** `ask` keeps the hand-written Messages API loop; `review` uses the Claude Agent SDK, which owns the tool loop, MCP connection, permissions, turn limit, spend cap, and structured output. Same tools, two ways to drive them.
+- **The model never gets the write tool.** The review agent's allowlist is read-only and runs in `dontAsk` permission mode with no built-in tools, isolated from local Claude settings and other MCP servers. It returns a JSON-schema-validated review; publishing is a separate step you trigger with `--post`.
+- **PR content is untrusted.** The review agent reads code written by whoever opened the PR, which could include instructions aimed at the model (prompt injection). Mitigations: the agent has only read-only tools and can't post; every comment is validated against the diff; `@mentions` in posted text are wrapped in code spans so a review can't ping people; owner/repo values are validated before any authenticated request. Still read a review before posting it with `--post` on PRs from people you don't know.
+- **Line-accurate inline comments.** Diffs are annotated with new-file line numbers so the model cites lines GitHub accepts; comments are validated against the diff hunks before posting, since one bad line makes GitHub reject the whole review.
 - **Lexical retrieval first.** `search_docs` uses BM25 with no embedding model or vector store. It exposes the same query → cited passages interface an embedding retriever would, so it can be upgraded without touching the tool contract.
 
 ## Roadmap
 
-- **Phase 3 — PR review.** Add `get_pr_diff` and `post_review_comment` (GitHub API) to the MCP server, and move orchestration to the Agent SDK.
 - **Phase 4 — Angular UI.** Chat interface with streaming answers and a visible tool-call trace.
 - **Phase 5 — Production.** Evaluation suite (answer grounding, review quality), cost limits, tracing, and a public demo deployment of the MCP server.
 
