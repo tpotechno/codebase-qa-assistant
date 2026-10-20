@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, formatPrDiff, formatPrSummary, parsePatch, parsePrRef } from "../src/github.ts";
+import { GitHubClient, formatPrDiff, isGeneratedFile, formatPrSummary, parsePatch, parsePrRef } from "../src/github.ts";
 import { PATCH, fakeGitHub } from "./fixtures/fake-github.ts";
 
 const ref = { owner: "acme", repo: "widgets", number: 7 };
@@ -72,4 +72,16 @@ test("postReview posts a COMMENT and folds out-of-diff comments into the body", 
     { path: "src/server.ts", line: 2, body: "PORT may be unset; Number(undefined) is NaN.", side: "RIGHT" },
   ]);
   assert.match(sent.body, /Additional notes[\s\S]*src\/server\.ts:40[\s\S]*other\.ts:1/);
+});
+
+test("generated files are collapsed unless requested by path", async () => {
+  assert.ok(isGeneratedFile("package-lock.json"));
+  assert.ok(isGeneratedFile("web/yarn.lock"));
+  assert.ok(isGeneratedFile("dist/app.min.js"));
+  assert.ok(!isGeneratedFile("src/package-lock-parser.ts"));
+
+  const pr = await new GitHubClient({ fetch: fakeGitHub().fetch }).getPr(ref);
+  pr.files.push({ filename: "package-lock.json", status: "modified", additions: 900, deletions: 40, changes: 940, patch: "@@ -1 +1 @@\n-a\n+b" });
+  assert.match(formatPrDiff(pr), /package-lock\.json[^\n]*\n\(generated file; diff omitted/);
+  assert.match(formatPrDiff(pr, { path: "package-lock.json" }), /1 \+ b/);
 });

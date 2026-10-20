@@ -18,7 +18,7 @@ An agentic assistant built on the Claude API that answers questions about a code
 | `read_file` | Reads a file with line numbers, 200 lines per call; refuses any path outside the repo root |
 | `search_docs` | Retrieval over READMEs, design docs, and ADRs: heading-aware chunking + BM25 ranking, returns cited passages |
 | `get_pr` | A GitHub PR's title, description, author, branches, head commit, and changed files with line counts |
-| `get_pr_diff` | The PR diff with new-file line numbers in a gutter, paged at ~24k characters; one file at a time with `path` |
+| `get_pr_diff` | The PR diff with new-file line numbers in a gutter, paged at ~24k characters; one file at a time with `path`. Lockfiles and minified bundles are collapsed unless requested by `path` |
 | `post_review` | Publishes a review as a single **COMMENT** (never approve or request changes). Off unless enabled; see below |
 
 Every tool validates its inputs with zod schemas and returns compact output to keep context and token use down. All but `post_review` are marked read-only (`readOnlyHint`).
@@ -115,7 +115,7 @@ npm run typecheck
 npm test
 ```
 
-31 tests, no API key or network needed. They cover the tools directly, document chunking and ranking, the MCP server over real HTTP (tool discovery, schema validation, path-traversal refusal, bearer-token auth), the GitHub client against an in-memory fake GitHub API (paging, error hints, diff line mapping, folding out-of-diff comments), the review agent against a scripted Agent SDK message stream (read-only tool allowlist, spend cap, error handling), and the full agent loop running against the server with a scripted fake Claude client.
+32 tests, no API key or network needed. They cover the tools directly, document chunking and ranking, the MCP server over real HTTP (tool discovery, schema validation, path-traversal refusal, bearer-token auth), the GitHub client against an in-memory fake GitHub API (paging, error hints, diff line mapping, folding out-of-diff comments), the review agent against a scripted Agent SDK message stream (read-only tool allowlist, spend cap, error handling), and the full agent loop running against the server with a scripted fake Claude client.
 
 ## Architecture
 

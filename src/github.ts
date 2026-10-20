@@ -251,6 +251,14 @@ export function formatPrSummary(pr: PrSummary): string {
 
 const DIFF_PAGE_CHARS = 24_000;
 
+/** Lockfiles, minified bundles, and similar: rarely worth review tokens. */
+const GENERATED = [
+  /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|composer\.lock|Gemfile\.lock|go\.sum)$/,
+  /\.min\.(js|css)$/,
+  /\.(map|snap)$/,
+];
+export const isGeneratedFile = (path: string) => GENERATED.some((re) => re.test(path));
+
 /**
  * Annotated diffs, paged by size so a large PR never floods the context window.
  * Pass `path` for one file; otherwise files are packed into pages of ~24k characters.
@@ -262,7 +270,13 @@ export function formatPrDiff(pr: PrSummary, opts: { path?: string; page?: number
     if (!files.length) return `Error: "${opts.path}" is not one of the files changed in ${formatPrRef(pr.ref)}.`;
   }
 
-  const sections = files.map((f) => `=== ${f.filename} (${f.status}, +${f.additions} -${f.deletions}) ===\n${parsePatch(f.patch).annotated}`);
+  const sections = files.map((f) => {
+    const head = `=== ${f.filename} (${f.status}, +${f.additions} -${f.deletions}) ===`;
+    if (!opts.path && isGeneratedFile(f.filename)) {
+      return `${head}\n(generated file; diff omitted. Request it with path="${f.filename}" if it matters.)`;
+    }
+    return `${head}\n${parsePatch(f.patch).annotated}`;
+  });
   const pages: string[][] = [[]];
   let size = 0;
   for (const s of sections) {
