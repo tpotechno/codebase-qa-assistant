@@ -149,6 +149,7 @@ story += [P("Goals", h2)] + bullets([
 story += [P("Non-goals (this phase)", h2)] + bullets([
     "Write operations (posting PR comments) &mdash; Phase 3.",
     "Embedding-based semantic search &mdash; deferred; see Section 6.",
+    "A web user interface &mdash; Phase 4.",
     "Hosted deployment and OAuth &mdash; Phase 5.",
 ])
 
@@ -248,6 +249,7 @@ story += [P("9. Limitations and next steps", h1)] + bullets([
     "<b>Substring code search.</b> " + C("search_code") + " scans files directly. For large repos, swap in ripgrep or a prebuilt index.",
     "<b>Single repository per server.</b> REPO_PATH is fixed at startup; multi-repo support would take a repo parameter with an allowlist.",
     "<b>Phase 3:</b> add " + C("get_pr_diff") + " and " + C("post_review_comment") + " tools backed by the GitHub API, and move orchestration to the Claude Agent SDK.",
+    "<b>Phase 4:</b> Angular web UI with streaming answers and a visible trace of each tool call, replacing the command line as the main way to use the assistant.",
     "<b>Phase 5:</b> evaluation suite, cost limits, tracing, OAuth, and a hosted deployment that can also use the Messages API MCP connector.",
 ])
 

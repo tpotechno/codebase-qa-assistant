@@ -38,6 +38,7 @@ MCP addresses all three: it defines a standard contract for listing and calling 
 
 - Write operations (posting PR comments) — Phase 3.
 - Embedding-based semantic search — deferred; see Section 6.
+- A web user interface — Phase 4.
 - Hosted deployment and OAuth — Phase 5.
 
 ## 3. What was built
@@ -161,4 +162,5 @@ claude mcp add --transport http codebase-qa http://127.0.0.1:3333/mcp
 - **Substring code search.** `search_code` scans files directly. For large repos, swap in ripgrep or a prebuilt index.
 - **Single repository per server.** `REPO_PATH` is fixed at startup; multi-repo support would take a repo parameter with an allowlist.
 - **Phase 3:** add `get_pr_diff` and `post_review_comment` tools backed by the GitHub API, and move orchestration to the Claude Agent SDK.
+- **Phase 4:** Angular web UI with streaming answers and a visible trace of each tool call, replacing the command line as the main way to use the assistant.
 - **Phase 5:** evaluation suite, cost limits, tracing, OAuth, and a hosted deployment that can also use the Messages API MCP connector.
