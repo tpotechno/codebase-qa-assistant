@@ -26,6 +26,12 @@ npm run ask -- "Where is the HTTP interceptor configured, and what does it add t
 
 Tool calls print to stderr as they happen (`↳ search_code {...}`), followed by the answer and a token summary.
 
+### Troubleshooting
+
+- **`401 invalid x-api-key`** — the key was rejected. Values in `.env` take priority over Windows environment variables, so check the `.env` line is exactly `ANTHROPIC_API_KEY=sk-ant-...` (no quotes or spaces), or create a new key in the Console.
+- **`npm.ps1 cannot be loaded ... not digitally signed`** — run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `npm.cmd` instead of `npm`.
+- **npm 12 `install-scripts` warning for esbuild** — run `npm install-scripts approve esbuild`, then `npm install`.
+
 ## Tests
 
 ```powershell

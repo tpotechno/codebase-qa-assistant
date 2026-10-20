@@ -1,4 +1,8 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+// override: values in .env win over machine-level environment variables,
+// so a stale ANTHROPIC_API_KEY set in Windows can't silently shadow the project key.
+dotenv.config({ override: true, quiet: true });
+
 import { runAgent } from "./agent.ts";
 import { repoRoot } from "./tools.ts";
 
