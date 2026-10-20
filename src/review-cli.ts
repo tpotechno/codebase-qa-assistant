@@ -4,56 +4,34 @@ dotenv.config({ override: true, quiet: true });
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { startHttpServer } from "./mcp-server.ts";
-import { GitHubClient, parsePrRef, formatPrRef } from "./github.ts";
+import { GitHubClient, formatPrRef } from "./github.ts";
 import { mcpToolProvider } from "./tool-provider.ts";
 import { repoRoot } from "./tools.ts";
 import { formatReviewMarkdown, inlineCommentBody, parseBudget, runReview } from "./review.ts";
+import { USAGE, UsageError, parseReviewArgs, preparePost, type ReviewArgs } from "./review-cli-lib.ts";
 
-const USAGE = `Usage: npm run review -- <owner/repo#123 | PR URL> [--post] [--out review.md]
-
-  --post        Publish the review to GitHub as a COMMENT (needs GITHUB_TOKEN with
-                Pull requests: read and write). Without it, the review is only printed.
-  --out <file>  Also save the review as Markdown.`;
-
-const args = process.argv.slice(2);
-const post = args.includes("--post");
-const outIdx = args.indexOf("--out");
-const outFile = outIdx >= 0 ? args[outIdx + 1] : undefined;
-const target = args.find((a, i) => !a.startsWith("--") && !(outIdx >= 0 && i === outIdx + 1));
-
-if (!target || (outIdx >= 0 && !outFile)) {
-  console.error(USAGE);
+const fail = (message: string): never => {
+  console.error(message);
   process.exit(1);
-}
-if (!process.env.ANTHROPIC_API_KEY) {
-  console.error("ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add your key.");
-  process.exit(1);
-}
+};
 
-let ref;
-try {
-  ref = parsePrRef(target);
-} catch (e) {
-  console.error((e as Error).message);
-  process.exit(1);
-}
-
+let args: ReviewArgs;
 let maxBudgetUsd: number;
 try {
+  args = parseReviewArgs(process.argv.slice(2));
   maxBudgetUsd = parseBudget(process.env.REVIEW_MAX_BUDGET_USD);
 } catch (e) {
-  console.error((e as Error).message);
-  process.exit(1);
+  fail(e instanceof UsageError ? `${e.message}\n\n${USAGE}` : (e as Error).message);
 }
+const { ref, post, outFile } = args!;
 
+if (!process.env.ANTHROPIC_API_KEY) fail("ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add your key.");
 const githubToken = process.env.GITHUB_TOKEN || undefined;
-if (post && !githubToken) {
-  console.error("--post needs GITHUB_TOKEN in .env (fine-grained token with Pull requests: read and write).");
-  process.exit(1);
-}
+if (post && !githubToken) fail("--post needs GITHUB_TOKEN in .env (fine-grained token with Pull requests: read and write).");
 
 // Use the configured MCP server, or start a private one in-process on a random port
-// with a one-time token, so a review works from a single terminal.
+// with a one-time token, so a review works from a single terminal. Its PR cache lasts
+// longer than a review, so the agent sees one snapshot of the PR from start to finish.
 let mcpUrl = process.env.MCP_SERVER_URL;
 let mcpToken = process.env.MCP_AUTH_TOKEN || undefined;
 let embedded: Awaited<ReturnType<typeof startHttpServer>> | undefined;
@@ -63,39 +41,29 @@ if (!mcpUrl) {
     root: repoRoot(),
     port: 0,
     token: mcpToken,
-    github: new GitHubClient({ token: githubToken }),
+    github: new GitHubClient({ token: githubToken, cacheTtlMs: 10 * 60_000 }),
     allowPost: post,
   });
   mcpUrl = embedded.url;
 }
+const closeEmbedded = () => {
+  embedded?.server.closeAllConnections();
+  embedded?.server.close();
+};
 
-// Before paying for a review with --post: confirm the server can post, and record the PR's
-// head commit so posting can refuse if new commits land while the review runs.
-let reviewedHeadSha: string | undefined;
+// Before paying for a review with --post: confirm posting will work and record the head commit.
+let headSha: string | undefined;
 if (post) {
-  let canPost = false;
   try {
     const probe = await mcpToolProvider(mcpUrl, mcpToken);
     try {
-      canPost = (await probe.listTools()).some((t) => t.name === "post_review");
-      const pr = await probe.callTool("get_pr", { pr: formatPrRef(ref) });
-      if (pr.isError) throw new Error(pr.content.replace(/^Error:\s*/, ""));
-      reviewedHeadSha = /^Head: ([0-9a-f]{40})/m.exec(pr.content)?.[1];
+      ({ headSha } = await preparePost(probe, ref, mcpUrl));
     } finally {
       await probe.close();
     }
   } catch (e) {
-    console.error(`Could not prepare to post: ${(e as Error).message}`);
-    embedded?.server.close();
-    process.exit(1);
-  }
-  if (!canPost) {
-    console.error(
-      `The MCP server at ${mcpUrl} has posting turned off, so --post would fail after the review.\n` +
-        "Either remove MCP_SERVER_URL from .env (review then starts its own server that can post),\n" +
-        "or restart `npm run serve` with GITHUB_TOKEN and GITHUB_ALLOW_POST=true in .env.",
-    );
-    process.exit(1);
+    closeEmbedded();
+    fail(`Not starting the review: ${(e as Error).message}`);
   }
 }
 
@@ -105,7 +73,7 @@ try {
   const result = await runReview(ref, {
     mcpUrl,
     mcpToken,
-    maxBudgetUsd,
+    maxBudgetUsd: maxBudgetUsd!,
     onToolCall: (name, input) => console.error(`  ↳ ${name} ${JSON.stringify(input)}`),
   });
 
@@ -128,14 +96,9 @@ try {
         pr: formatPrRef(ref),
         body: formatReviewMarkdown(ref, result.review, { includeInline: false }),
         comments: result.review.comments.map((c) => ({ path: c.path, line: c.line, body: inlineCommentBody(c) })),
-        head_sha: reviewedHeadSha,
+        head_sha: headSha,
       });
-      if (r.isError) {
-        const hint = /not found/i.test(r.content) && !embedded
-          ? " (start the MCP server with GITHUB_TOKEN and GITHUB_ALLOW_POST=true)"
-          : "";
-        throw new Error(`${r.content}${hint}`);
-      }
+      if (r.isError) throw new Error(r.content);
       console.error(r.content);
     } finally {
       await tools.close();
@@ -147,6 +110,5 @@ try {
   console.error((e as Error).message);
   process.exitCode = 1;
 } finally {
-  embedded?.server.closeAllConnections();
-  embedded?.server.close();
+  closeEmbedded();
 }

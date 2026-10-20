@@ -19,7 +19,30 @@ export function parsePrRef(input: string): PrRef {
   const short = /^([\w.-]+)\/([\w.-]+)(?:#|\/)(\d+)$/.exec(s);
   const m = url ?? short;
   if (!m) throw new Error(`Not a pull request reference: "${input}". Use owner/repo#123 or a PR URL.`);
+  // "." and ".." are valid characters but would let URL normalization redirect an
+  // authenticated request (including a POST) to a different API path.
+  if (/^\.+$/.test(m[1]) || /^\.+$/.test(m[2])) {
+    throw new Error(`Not a pull request reference: "${input}" (owner and repo can't be "." or "..").`);
+  }
   return { owner: m[1], repo: m[2], number: Number(m[3]) };
+}
+
+/** API path for a PR, with each segment encoded as defense in depth. */
+const prPath = (r: PrRef) =>
+  `/repos/${encodeURIComponent(r.owner)}/${encodeURIComponent(r.repo)}/pulls/${Number(r.number)}`;
+
+/** Pull the 40-character head SHA out of formatPrSummary output (undefined if absent). */
+export function extractHeadSha(summary: string): string | undefined {
+  return /^Head: ([0-9a-f]{40})\b/m.exec(summary)?.[1];
+}
+
+/**
+ * Review text comes from a model reading untrusted PR content, and is posted under the
+ * user's token. Wrap @mentions in code spans so a prompt-injected PR can't make the
+ * review ping people or teams. (Email addresses are untouched.)
+ */
+export function neutralizeMentions(text: string): string {
+  return text.replace(/(^|[^\w`@])@([A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\/[A-Za-z0-9_.-]+)?)/g, "$1`@$2`");
 }
 
 export const formatPrRef = (r: PrRef) => `${r.owner}/${r.repo}#${r.number}`;
@@ -126,6 +149,7 @@ export interface GitHubClientOptions {
   cacheTtlMs?: number;
 }
 
+const MAX_CACHED_PRS = 50;
 const MAX_FILE_PAGES = 30; // GitHub caps the files endpoint at 3,000 files (30 x 100)
 
 export class GitHubClient {
@@ -185,8 +209,12 @@ export class GitHubClient {
     const hit = this.cache.get(key);
     if (!opts.fresh && hit && Date.now() - hit.at < this.cacheTtlMs) return hit.pr;
 
+    const now = Date.now();
+    for (const [k, v] of this.cache) if (now - v.at >= this.cacheTtlMs) this.cache.delete(k);
+    while (this.cache.size >= MAX_CACHED_PRS) this.cache.delete(this.cache.keys().next().value!);
+
     const pr = this.fetchPr(ref);
-    this.cache.set(key, { at: Date.now(), pr });
+    this.cache.set(key, { at: now, pr });
     pr.catch(() => {
       if (this.cache.get(key)?.pr === pr) this.cache.delete(key);
     });
@@ -194,7 +222,7 @@ export class GitHubClient {
   }
 
   private async fetchPr(ref: PrRef): Promise<PrSummary> {
-    const base = `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`;
+    const base = prPath(ref);
     const pr = await this.request<any>(base);
     const files: PrFile[] = [];
     for (let page = 1; page <= MAX_FILE_PAGES; page++) {
@@ -243,12 +271,13 @@ export class GitHubClient {
 
     const inline: Array<ReviewComment & { side: "RIGHT" }> = [];
     const folded: ReviewComment[] = [];
-    for (const c of comments) {
+    for (const raw of comments) {
+      const c = { ...raw, body: neutralizeMentions(raw.body) };
       if (lineSets.get(c.path)?.has(c.line)) inline.push({ ...c, side: "RIGHT" });
       else folded.push(c);
     }
 
-    let fullBody = body;
+    let fullBody = neutralizeMentions(body);
     if (folded.length) {
       fullBody +=
         "\n\n**Additional notes** (lines outside the diff)\n\n" +
@@ -256,7 +285,7 @@ export class GitHubClient {
     }
 
     const review = await this.request<{ html_url: string }>(
-      `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/reviews`,
+      `${prPath(ref)}/reviews`,
       {
         method: "POST",
         body: JSON.stringify({ commit_id: pr.headSha, event: "COMMENT", body: fullBody, comments: inline }),

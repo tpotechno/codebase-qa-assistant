@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, formatPrDiff, isGeneratedFile, formatPrSummary, parsePatch, parsePrRef } from "../src/github.ts";
-import { PATCH, fakeGitHub } from "./fixtures/fake-github.ts";
+import { GitHubClient, extractHeadSha, formatPrDiff, isGeneratedFile, formatPrSummary, neutralizeMentions, parsePatch, parsePrRef } from "../src/github.ts";
+import { HEAD_SHA, PATCH, fakeGitHub } from "./fixtures/fake-github.ts";
 
 const ref = { owner: "acme", repo: "widgets", number: 7 };
 
@@ -25,7 +25,7 @@ test("getPr returns metadata and files, sends the token when set", async () => {
   const gh = fakeGitHub();
   const pr = await new GitHubClient({ token: "t0k", fetch: gh.fetch }).getPr(ref);
   assert.equal(pr.title, "Read port from environment");
-  assert.equal(pr.headSha, "abc123");
+  assert.equal(pr.headSha, HEAD_SHA);
   assert.equal(pr.files[0].filename, "src/server.ts");
   assert.ok(gh.requests.every((r) => r.auth === "Bearer t0k"));
   assert.match(formatPrSummary(pr), /acme\/widgets#7: Read port from environment/);
@@ -67,7 +67,7 @@ test("postReview posts a COMMENT and folds out-of-diff comments into the body", 
 
   const sent = gh.requests.find((x) => x.method === "POST")!.body;
   assert.equal(sent.event, "COMMENT");
-  assert.equal(sent.commit_id, "abc123");
+  assert.equal(sent.commit_id, HEAD_SHA);
   assert.deepEqual(sent.comments, [
     { path: "src/server.ts", line: 2, body: "PORT may be unset; Number(undefined) is NaN.", side: "RIGHT" },
   ]);
@@ -141,9 +141,54 @@ test("postReview refuses when the PR moved past the reviewed commit", async () =
   const client = new GitHubClient({ token: "t0k", fetch: gh.fetch });
   await assert.rejects(
     client.postReview(ref, "body", [], { expectedHeadSha: "f".repeat(40) }),
-    /new commits since it was reviewed \(reviewed fffffff, now abc123\)/,
+    /new commits since it was reviewed \(reviewed fffffff, now a1b2c3d\)/,
   );
   assert.ok(!gh.requests.some((r) => r.method === "POST"), "nothing posted");
-  const ok = await client.postReview(ref, "body", [], { expectedHeadSha: "abc123" });
+  const ok = await client.postReview(ref, "body", [], { expectedHeadSha: HEAD_SHA });
   assert.match(ok.url, /pullrequestreview/);
+});
+
+test("parsePrRef rejects dot segments that could redirect an authenticated request", () => {
+  for (const bad of ["../..#1", "./widgets#1", "acme/..#1", "../../1", "https://github.com/../x/pull/1"]) {
+    assert.throws(() => parsePrRef(bad), /Not a pull request reference/, bad);
+  }
+  assert.deepEqual(parsePrRef("my.org/my.repo#3"), { owner: "my.org", repo: "my.repo", number: 3 });
+});
+
+test("extractHeadSha reads the SHA from real get_pr output and fails on anything else", async () => {
+  const pr = await new GitHubClient({ fetch: fakeGitHub().fetch }).getPr(ref);
+  assert.equal(extractHeadSha(formatPrSummary(pr)), HEAD_SHA);
+  assert.equal(extractHeadSha("Head: abc123 | +1 -0"), undefined);
+  assert.equal(extractHeadSha("no head line"), undefined);
+});
+
+test("the PR cache evicts expired entries and stays bounded", async () => {
+  const gh = fakeGitHub();
+  const expiring = new GitHubClient({ fetch: gh.fetch, cacheTtlMs: 1 });
+  await expiring.getPr(ref);
+  await new Promise((r) => setTimeout(r, 5));
+  await expiring.getPr({ ...ref, number: 99 }).catch(() => {});
+  assert.equal((expiring as any).cache.size, 0, "expired success evicted, failure never cached");
+
+  const bounded = new GitHubClient({ fetch: async () => new Response("{}", { status: 500 }), cacheTtlMs: 3_600_000 });
+  (bounded as any).fetchPr = async () => ({}); // succeed instantly without HTTP
+  for (let n = 1; n <= 120; n++) await bounded.getPr({ ...ref, number: n });
+  assert.ok((bounded as any).cache.size <= 50);
+});
+
+test("neutralizeMentions wraps @mentions in code spans but leaves emails and code alone", () => {
+  assert.equal(neutralizeMentions("cc @octocat please"), "cc `@octocat` please");
+  assert.equal(neutralizeMentions("@acme/security look"), "`@acme/security` look");
+  assert.equal(neutralizeMentions("mail dev@example.com"), "mail dev@example.com");
+  assert.equal(neutralizeMentions("use `@Input()` here"), "use `@Input()` here");
+});
+
+test("postReview neutralizes mentions in the body and inline comments", async () => {
+  const gh = fakeGitHub();
+  await new GitHubClient({ token: "t", fetch: gh.fetch }).postReview(ref, "Summary for @boss", [
+    { path: "src/server.ts", line: 2, body: "ping @team" },
+  ]);
+  const sent = gh.requests.find((x) => x.method === "POST")!.body;
+  assert.equal(sent.body, "Summary for `@boss`");
+  assert.equal(sent.comments[0].body, "ping `@team`");
 });

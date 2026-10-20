@@ -1,5 +1,7 @@
 /** An in-memory stand-in for the GitHub REST endpoints the PR tools use. */
 
+export const HEAD_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"; // realistic 40-hex
+
 export const PATCH = [
   "@@ -1,4 +1,5 @@",
   " import express from \"express\";",
@@ -56,7 +58,7 @@ export function fakeGitHub(opts: { fileCount?: number } = {}): FakeGitHub {
         draft: false,
         merged_at: null,
         base: { ref: "main" },
-        head: { ref: "port-env", sha: "abc123" },
+        head: { ref: "port-env", sha: HEAD_SHA },
         additions: 2 + extra.length,
         deletions: 1,
         changed_files: files.length,
