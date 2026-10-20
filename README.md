@@ -95,6 +95,8 @@ npm test
 └──────────────────────────────────────────────┘
 ```
 
+Full design write-up: [docs/mcp_server_design.pdf](docs/mcp_server_design.pdf) (regenerate with `python scripts/build_design_doc.py docs/mcp_server_design.pdf`, requires `pip install reportlab`).
+
 **Design notes**
 
 - **Client-side MCP.** The agent connects to the server with the MCP client SDK, lists its tools, and translates them into Messages API tool definitions. This works against a server on `localhost`. (The Messages API's built-in MCP connector needs a publicly reachable server, which fits the hosted deployment in Phase 5.)
