@@ -95,7 +95,7 @@ npm test
 └──────────────────────────────────────────────┘
 ```
 
-Full design write-up: [docs/mcp_server_design.pdf](docs/mcp_server_design.pdf) (regenerate with `python scripts/build_design_doc.py docs/mcp_server_design.pdf`, requires `pip install reportlab`).
+Full design write-up: [docs/mcp_server_design.md](docs/mcp_server_design.md) ([PDF](docs/mcp_server_design.pdf)) (regenerate with `python scripts/build_design_doc.py docs/mcp_server_design.pdf`, requires `pip install reportlab`).
 
 **Design notes**
 
