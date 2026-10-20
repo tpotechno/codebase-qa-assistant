@@ -2,13 +2,16 @@
 
 An agentic assistant built on the Claude API that answers questions about a codebase and reviews GitHub pull requests, grounded in the actual code and docs. Its tools are served by a custom **MCP server** over Streamable HTTP, so the same tools work for this app, Claude Code, and any other MCP client.
 
-**Stack:** TypeScript / Node, Claude API (`@anthropic-ai/sdk`), Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`), Model Context Protocol (`@modelcontextprotocol/sdk`), GitHub REST API, Express. Angular front end in Phase 4.
+**Stack:** TypeScript / Node, Claude API (`@anthropic-ai/sdk`), Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`), Model Context Protocol (`@modelcontextprotocol/sdk`), GitHub REST API, Express, Angular 21 (signals, zoneless).
+
+![Asking a question: the answer streams in on the left, the agent's steps on the right](docs/screenshots/ask.png)
 
 ## Status
 
 - **Phase 1 — complete.** Hand-written Messages API tool loop.
 - **Phase 2 — complete.** Custom MCP server (Streamable HTTP) with code search, file reading, and documentation retrieval; the agent discovers its tools from the server at runtime.
 - **Phase 3 — complete.** Pull-request review: GitHub PR tools on the MCP server, and a `review` command orchestrated by the Claude Agent SDK that returns a structured, line-anchored review and can publish it to GitHub.
+- **Phase 4 — complete.** Angular web UI: streaming answers, a live trace of every tool call, and PR reviews you can read before posting the exact draft to GitHub.
 
 ### Tools
 
@@ -77,6 +80,31 @@ The review agent reads the PR, pages through the whole diff, looks up surroundin
 
 **GitHub token.** Public PRs work without one (GitHub allows 60 unauthenticated requests per hour). For private repos, higher limits, or `--post`, create a fine-grained token at github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens, limited to the repositories you want reviewed, with **Pull requests: Read and write** and **Contents: Read-only**. Put it in `.env` as `GITHUB_TOKEN=`.
 
+## Web UI
+
+```powershell
+npm run web:install   # once: install the Angular app's packages
+npm run web:build     # build the UI
+npm run web           # http://localhost:3334
+```
+
+Uses the same `.env` as the command line. Two modes:
+
+- **Ask a question.** The answer streams in as it's written. The Steps panel shows each tool call as it happens (what was searched, which lines were read) with the result one click away. Short notes Claude writes before calling a tool appear there too, so the answer itself stays clean.
+- **Review a pull request.** Enter `owner/repo#123` or a PR link. You get the verdict, the summary, and comments grouped by file with their line numbers. **Post to GitHub** publishes exactly the draft on screen, as a comment, and is refused if the PR has new commits since the review started.
+
+![Reviewing a pull request: verdict, summary, and line comments grouped by file](docs/screenshots/review.png)
+
+**Try it without an API key:** `npm run web:demo` serves the UI on port 3335 with a scripted stand-in for Claude. The repo tools run for real against this repository; the review uses a sample PR (`acme/widgets#7`) from an in-memory GitHub, and nothing is sent anywhere.
+
+**Developing the UI:** run `npm run web` in one terminal and `npm run web:dev` in another, then open http://localhost:4200. `ng serve` reloads on save and proxies `/api` to the server.
+
+**Security.** The server holds your Anthropic and GitHub credentials, so it listens on `127.0.0.1` only and rejects requests whose `Host` isn't its own (DNS rebinding), requests from other sites' pages (`Origin` check), and anything that isn't JSON (cross-site forms). Closing the tab or pressing **Stop** cancels the run, so it stops spending. At most two runs can be active at once.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WEB_PORT` | `3334` | Port for `npm run web` |
+
 ### Using the MCP server from Claude Code
 
 With the server running:
@@ -104,6 +132,7 @@ Claude Code can then call the repo tools and the PR tools, e.g. "use codebase-qa
 - **`401 invalid x-api-key`** — the key was rejected. Values in `.env` take priority over Windows environment variables, so check the `.env` line is exactly `ANTHROPIC_API_KEY=sk-ant-...` (no quotes or spaces), or create a new key in the Console.
 - **`GitHub 404` / `GitHub 403`** on a PR — the PR is private or you hit the unauthenticated rate limit; set `GITHUB_TOKEN`.
 - **`Review failed: spend cap ... reached`** — raise `REVIEW_MAX_BUDGET_USD` for very large PRs.
+- **"Can't reach the local server" in the browser** — start it with `npm run web`. **"The web UI isn't built yet"** — run `npm run web:build`.
 - **`Could not connect to MCP server`** — start it with `npm run serve` in another terminal, or remove `MCP_SERVER_URL` from `.env` to use local tools.
 - **`npm.ps1 cannot be loaded ... not digitally signed`** — run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `npm.cmd` instead of `npm`.
 - **npm 12 `install-scripts` warning for esbuild** — run `npm install-scripts approve esbuild`, then `npm install`.
@@ -112,16 +141,18 @@ Claude Code can then call the repo tools and the PR tools, e.g. "use codebase-qa
 
 ```powershell
 npm run typecheck
-npm test
+npm test          # API, agents, MCP server
+npm run web:test  # Angular UI
 ```
 
-The tests need no API key or network. They cover the tools directly, document chunking and ranking, the MCP server over real HTTP (tool discovery, schema validation, path-traversal refusal, bearer-token auth), the GitHub client against an in-memory fake GitHub API (paging, error hints, diff line mapping, folding out-of-diff comments), the review agent against a scripted Agent SDK message stream (read-only tool allowlist, spend cap, error handling), and the full agent loop running against the server with a scripted fake Claude client.
+The tests need no API key or network. The web API tests stream real Server-Sent Events from the server, using a fake Claude client that streams text and a fake GitHub, and check the cross-site protections. The Angular tests cover the event-stream parser, the trace, and the review helpers. The rest cover the tools directly, document chunking and ranking, the MCP server over real HTTP (tool discovery, schema validation, path-traversal refusal, bearer-token auth), the GitHub client against an in-memory fake GitHub API (paging, error hints, diff line mapping, folding out-of-diff comments), the review agent against a scripted Agent SDK message stream (read-only tool allowlist, spend cap, error handling), and the full agent loop running against the server with a scripted fake Claude client.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────┐
-│  Angular front end (chat UI + streaming)      │  Phase 4
+│  Angular UI (web/) ── SSE over fetch ──┐      │  Phase 4
+│  Web API (src/web-app.ts) ◀────────────┘      │
 ├──────────────────────────────────────────────┤
 │  ask:    src/agent.ts — hand-written loop     │  Phase 1–2
 │            └─ ToolProvider: local | MCP       │
@@ -151,7 +182,6 @@ Design docs:
 
 ## Roadmap
 
-- **Phase 4 — Angular UI.** Chat interface with streaming answers and a visible tool-call trace.
 - **Phase 5 — Production.** Evaluation suite (answer grounding, review quality), cost limits, tracing, and a public demo deployment of the MCP server.
 
 ## License

@@ -1,0 +1,165 @@
+.pr-row {
+  display: flex;
+  gap: 0.5rem;
+
+  input {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.pr-meta {
+  margin: -0.4rem 0 1.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+h2 a {
+  color: inherit;
+  text-decoration-color: var(--rule);
+  text-underline-offset: 0.2em;
+
+  &:hover {
+    text-decoration-color: currentColor;
+  }
+}
+
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+
+  .mark {
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+
+  &.looks_good .mark {
+    background: var(--ok);
+  }
+  &.minor_issues .mark {
+    background: var(--suggestion);
+  }
+  &.needs_changes .mark {
+    background: var(--blocker);
+  }
+
+  .counts {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+}
+
+.comments {
+  margin-top: 1.75rem;
+  display: grid;
+  gap: 1.5rem;
+}
+
+.file {
+  h3 {
+    margin: 0 0 0.5rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-m);
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  li {
+    display: grid;
+    grid-template-columns: 3.25rem minmax(0, 1fr);
+    border-top: 1px solid var(--rule);
+
+    &:first-child {
+      border-top: 0;
+    }
+  }
+}
+
+/* Same gutter language as the trace and the diffs the reviewer reads. */
+.gutter {
+  background: var(--gutter);
+  border-right: 1px solid var(--rule);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  text-align: right;
+  padding: 0.8rem 0.6rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+li.blocker .gutter {
+  box-shadow: inset 3px 0 0 var(--blocker);
+}
+li.suggestion .gutter {
+  box-shadow: inset 3px 0 0 var(--suggestion);
+}
+
+.comment {
+  padding: 0.7rem 0.9rem 0.4rem;
+  min-width: 0;
+
+  .prose {
+    font-size: 0.95rem;
+  }
+}
+
+.severity {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+li.blocker .severity {
+  color: var(--blocker);
+}
+li.suggestion .severity {
+  color: var(--suggestion);
+}
+li.nit .severity {
+  color: var(--muted);
+}
+
+.clean {
+  color: var(--muted);
+}
+
+.publish {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+
+  p {
+    margin: 0;
+    flex-basis: 100%;
+  }
+
+  .row {
+    display: flex;
+    gap: 0.5rem;
+  }
+}
+
+.posted {
+  color: var(--ok);
+
+  a {
+    margin-left: 0.25rem;
+  }
+}

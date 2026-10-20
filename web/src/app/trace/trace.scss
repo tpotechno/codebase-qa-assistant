@@ -1,0 +1,151 @@
+:host {
+  display: block;
+}
+
+.empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.trace {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+li {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+  border-top: 1px solid var(--rule);
+
+  &:first-child {
+    border-top: 0;
+  }
+}
+
+/* The gutter: line-number column, like a diff. */
+.gutter {
+  background: var(--gutter);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  text-align: right;
+  padding: 0.7rem 0.6rem 0 0;
+  border-right: 1px solid var(--rule);
+  font-variant-numeric: tabular-nums;
+}
+
+.body {
+  padding: 0.6rem 0.75rem 0.65rem;
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.tool {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.summary {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.status {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  min-width: 1ch;
+}
+
+.call.ok .status {
+  color: var(--ok);
+}
+
+.call.error {
+  .status,
+  .tool {
+    color: var(--blocker);
+  }
+}
+
+/* The running step: the gutter takes the accent, so the eye finds it immediately. */
+.call.running .gutter {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-right-color: var(--accent);
+}
+
+.call.running .status::after {
+  content: '';
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  border-right-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .call.running .status::after {
+    animation: none;
+    border-right-color: var(--accent);
+  }
+}
+
+.note {
+  p {
+    margin: 0;
+    padding: 0.55rem 0.75rem;
+    font-size: 0.85rem;
+    font-style: italic;
+    color: var(--muted);
+  }
+}
+
+details {
+  margin-top: 0.4rem;
+
+  summary {
+    cursor: pointer;
+    font-size: 0.78rem;
+    color: var(--accent);
+    width: fit-content;
+    border-radius: var(--radius-s);
+  }
+
+  pre {
+    margin: 0.4rem 0 0;
+    padding: 0.5rem 0.6rem;
+    max-height: 14rem;
+    overflow: auto;
+    background: var(--gutter);
+    border-radius: var(--radius-s);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}

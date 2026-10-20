@@ -1,0 +1,59 @@
+<form class="composer" (ngSubmit)="submit()">
+  <label for="question">Ask about {{ config()?.repoName ?? 'this codebase' }}</label>
+  <textarea
+    id="question"
+    name="question"
+    rows="3"
+    [ngModel]="draft()"
+    (ngModelChange)="draft.set($event)"
+    (keydown)="onKeydown($event)"
+    [disabled]="running()"
+    placeholder="How does authentication work? Where is the retry logic?"
+  ></textarea>
+  <div class="actions">
+    <span class="hint">Ctrl+Enter to ask</span>
+    @if (running()) {
+      <button type="button" class="secondary" (click)="stop()">Stop</button>
+    } @else {
+      <button type="submit" [disabled]="!draft().trim()">Ask</button>
+    }
+  </div>
+</form>
+
+@if (!asked()) {
+  <section class="start" aria-label="Example questions">
+    <p>Answers cite the files and lines they come from. Try one of these:</p>
+    <ul>
+      @for (s of suggestions; track s) {
+        <li><button type="button" class="link" (click)="useSuggestion(s)">{{ s }}</button></li>
+      }
+    </ul>
+  </section>
+} @else {
+  <div class="workspace">
+    <article class="answer" aria-live="polite">
+      <h2>{{ asked() }}</h2>
+      @if (answer()) {
+        <div class="prose" [class.streaming]="running()" [innerHTML]="answer() | markdown"></div>
+      } @else if (running()) {
+        <p class="waiting">Working through the code…</p>
+      }
+      @if (error()) {
+        <p class="error" role="alert">{{ error() }}</p>
+      }
+      @if (stats(); as s) {
+        <p class="stats">
+          {{ s.turns }} {{ s.turns === 1 ? 'turn' : 'turns' }}, {{ s.toolCalls }} tool
+          {{ s.toolCalls === 1 ? 'call' : 'calls' }}, {{ s.inputTokens + s.outputTokens | number }} tokens
+        </p>
+      }
+    </article>
+
+    <aside class="steps" aria-label="Steps">
+      <details open>
+        <summary><h3>Steps</h3></summary>
+        <app-trace [steps]="steps()" [running]="running()" />
+      </details>
+    </aside>
+  </div>
+}

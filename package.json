@@ -1,13 +1,19 @@
 {
   "name": "codebase-qa-assistant",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "Codebase Q&A and PR Review Assistant built on the Claude API, with a custom MCP server",
+  "description": "Codebase Q&A and PR Review Assistant built on the Claude API: custom MCP server, Agent SDK reviewer, Angular web UI",
   "scripts": {
     "ask": "tsx src/index.ts",
     "review": "tsx src/review-cli.ts",
     "serve": "tsx src/serve.ts",
+    "web": "tsx src/web-server.ts",
+    "web:install": "npm --prefix web install",
+    "web:build": "npm --prefix web run build",
+    "web:dev": "npm --prefix web start",
+    "web:test": "npm --prefix web test -- --watch=false",
+    "web:demo": "tsx scripts/demo-server.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts"
   },

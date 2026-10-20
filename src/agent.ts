@@ -14,7 +14,16 @@ export interface AgentOptions {
   maxTurns?: number;
   maxTokens?: number;
   /** Called for each tool call so a CLI or UI can show progress. */
-  onToolCall?: (name: string, input: unknown) => void;
+  onToolCall?: (name: string, input: unknown, id: string) => void;
+  /** Called with each tool's result (same id as onToolCall). */
+  onToolResult?: (id: string, result: { content: string; isError: boolean }) => void;
+  /**
+   * Stream text as it is generated. When set, responses are streamed; `turn` lets a UI tell
+   * the final answer apart from the short notes Claude writes before calling tools.
+   */
+  onText?: (delta: string, turn: number) => void;
+  /** Abort the run (e.g. the browser disconnected). Stops in-flight API calls too. */
+  signal?: AbortSignal;
   /** Where tools come from (in-process or an MCP server). Defaults to local. */
   tools?: ToolProvider;
   /** Injectable for tests. */
@@ -46,13 +55,22 @@ export async function runAgent(question: string, opts: AgentOptions = {}): Promi
   let toolCalls = 0;
 
   for (let turn = 1; turn <= maxTurns; turn++) {
-    const response = await client.messages.create({
+    if (opts.signal?.aborted) throw new Error("Aborted");
+    const params: Anthropic.MessageCreateParamsNonStreaming = {
       model,
       max_tokens: opts.maxTokens ?? 2048,
       system: SYSTEM_PROMPT,
       tools,
       messages,
-    });
+    };
+    let response: Anthropic.Message;
+    if (opts.onText && typeof client.messages.stream === "function") {
+      const stream = client.messages.stream(params, { signal: opts.signal });
+      stream.on("text", (delta) => opts.onText!(delta, turn));
+      response = await stream.finalMessage();
+    } else {
+      response = await client.messages.create(params, { signal: opts.signal });
+    }
 
     usage.inputTokens += response.usage.input_tokens;
     usage.outputTokens += response.usage.output_tokens;
@@ -74,7 +92,7 @@ export async function runAgent(question: string, opts: AgentOptions = {}): Promi
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const use of toolUses) {
       toolCalls++;
-      opts.onToolCall?.(use.name, use.input);
+      opts.onToolCall?.(use.name, use.input, use.id);
       let content: string;
       let isError = false;
       try {
@@ -83,6 +101,7 @@ export async function runAgent(question: string, opts: AgentOptions = {}): Promi
         content = `Error: ${(e as Error).message}`;
         isError = true;
       }
+      opts.onToolResult?.(use.id, { content, isError });
       results.push({ type: "tool_result", tool_use_id: use.id, content, is_error: isError });
     }
     messages.push({ role: "user", content: results });
