@@ -40,14 +40,46 @@ export interface WebAppDeps {
   anthropic?: Pick<Anthropic, "messages">;
   reviewQuery?: ReviewOptions["queryFn"];
   maxConcurrentRuns?: number;
+  /** Longest a single ask or review may run before it is cancelled. Default 10 minutes. */
+  runTimeoutMs?: number;
   drafts?: DraftStore;
 }
+
+/**
+ * Resolve with the work, or reject as soon as the signal aborts. The handler then finishes
+ * (closing the response and freeing its slot) even if the work ignores the signal, e.g. a
+ * tool that is stuck. The abandoned promise is left to settle on its own.
+ */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
+const duration = (ms: number) =>
+  ms >= 60_000 ? `${Math.round(ms / 60_000)} minutes` : `${Math.max(1, Math.round(ms / 1000))} seconds`;
 
 const PREVIEW_CHARS = 600;
 const preview = (s: string) => (s.length > PREVIEW_CHARS ? `${s.slice(0, PREVIEW_CHARS)}…` : s);
 
-/** Open an SSE response; returns a typed sender and an AbortController tied to disconnects. */
-function openStream(req: Request, res: Response) {
+/**
+ * Open an SSE response. Returns a typed sender and an AbortController that fires when the
+ * browser disconnects or the run exceeds timeoutMs (so a stalled tool or stream can't hold
+ * a concurrency slot forever).
+ */
+function openStream(req: Request, res: Response, timeoutMs: number) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
@@ -56,16 +88,29 @@ function openStream(req: Request, res: Response) {
   });
   res.flushHeaders();
   const abort = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    abort.abort();
+  }, timeoutMs);
+  timer.unref();
   res.on("close", () => {
+    clearTimeout(timer);
     if (!res.writableFinished) abort.abort();
   });
   const send = (event: string, data: unknown) => {
     if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
+  /** Report a failure, unless the browser left (then there is no one to tell). */
+  const fail = (e: unknown) => {
+    if (timedOut) send("error", { message: `Stopped: no result after ${duration(timeoutMs)}. Try a narrower question or a smaller PR.` });
+    else if (!abort.signal.aborted) send("error", { message: (e as Error).message });
+  };
   const end = () => {
+    clearTimeout(timer);
     if (!res.writableEnded) res.end();
   };
-  return { send, end, abort };
+  return { send, fail, end, abort };
 }
 
 /**
@@ -138,7 +183,11 @@ export class DraftStore {
 
   add(ref: PrRef, headSha: string, review: Review): string {
     this.prune();
-    while (this.drafts.size >= this.max) this.drafts.delete(this.drafts.keys().next().value!);
+    // Evict the oldest drafts, but never one that is mid-post (its result must stay findable).
+    for (const [id, d] of this.drafts) {
+      if (this.drafts.size < this.max) break;
+      if (d.state !== "posting") this.drafts.delete(id);
+    }
     const id = randomUUID();
     this.drafts.set(id, { ref, headSha, review, createdAt: Date.now(), state: "ready" });
     return id;
@@ -171,6 +220,7 @@ export function createWebApp(deps: WebAppDeps): Express {
   app.use(express.json({ limit: "256kb" }));
 
   const drafts = deps.drafts ?? new DraftStore();
+  const runTimeoutMs = deps.runTimeoutMs ?? 10 * 60_000;
   let activeRuns = 0;
   const maxRuns = deps.maxConcurrentRuns ?? 2;
   const claimRun = (res: Response) => {
@@ -197,11 +247,11 @@ export function createWebApp(deps: WebAppDeps): Express {
     if (!parsed.success) return badRequest(res, parsed.error);
     if (!claimRun(res)) return;
 
-    const { send, end, abort } = openStream(req, res);
+    const { send, fail, end, abort } = openStream(req, res, runTimeoutMs);
     let tools: ToolProvider | undefined;
     try {
       tools = await deps.openTools();
-      const result = await runAgent(parsed.data.question, {
+      const result = await untilAborted(runAgent(parsed.data.question, {
         model: deps.model,
         tools,
         client: deps.anthropic,
@@ -209,14 +259,14 @@ export function createWebApp(deps: WebAppDeps): Express {
         onText: (delta, turn) => send("text", { delta, turn }),
         onToolCall: (name, input, id) => send("tool_call", { id, name, input }),
         onToolResult: (id, r) => send("tool_result", { id, isError: r.isError, preview: preview(r.content) }),
-      });
+      }), abort.signal);
       send("done", { answer: result.answer, turns: result.turns, toolCalls: result.toolCalls, usage: result.usage });
     } catch (e) {
-      if (!abort.signal.aborted) send("error", { message: (e as Error).message });
+      fail(e);
     } finally {
-      activeRuns--;
       await tools?.close().catch(() => {});
       end();
+      activeRuns--; // released last, so the cap counts the MCP connection too
     }
   });
 
@@ -231,13 +281,15 @@ export function createWebApp(deps: WebAppDeps): Express {
     }
     if (!claimRun(res)) return;
 
-    const { send, end, abort } = openStream(req, res);
+    const { send, fail, end, abort } = openStream(req, res, runTimeoutMs);
     try {
       // Read the PR first: validates it exists and pins the commit the review is based on.
-      const pr = await deps.github.getPr(ref);
+      // fresh: start from the PR's current head, not a cached snapshot, or posting would be
+      // refused as "new commits" for a review that really did see the latest code.
+      const pr = await untilAborted(deps.github.getPr(ref, { fresh: true }), abort.signal);
       if (abort.signal.aborted) return; // the browser left while the PR was loading
       send("started", { pr: formatPrRef(ref), title: pr.title, url: pr.url, headSha: pr.headSha, files: pr.changedFiles });
-      const result = await runReview(ref, {
+      const result = await untilAborted(runReview(ref, {
         mcpUrl: deps.mcp.url,
         mcpToken: deps.mcp.token,
         model: deps.model,
@@ -245,7 +297,7 @@ export function createWebApp(deps: WebAppDeps): Express {
         abortController: abort,
         queryFn: deps.reviewQuery,
         onToolCall: (name, input) => send("tool_call", { name, input }),
-      });
+      }), abort.signal);
       send("done", {
         review: result.review,
         draftId: drafts.add(ref, pr.headSha, result.review),
@@ -255,10 +307,10 @@ export function createWebApp(deps: WebAppDeps): Express {
         headSha: pr.headSha,
       });
     } catch (e) {
-      if (!abort.signal.aborted) send("error", { message: (e as Error).message });
+      fail(e);
     } finally {
-      activeRuns--;
       end();
+      activeRuns--;
     }
   });
 

@@ -112,5 +112,5 @@ test("streams text by turn and reports tool results with matching ids", async ()
 test("an aborted signal stops the run", async () => {
   const ac = new AbortController();
   ac.abort();
-  await assert.rejects(runAgent("q", { client: { messages: { create: async () => ({}) } } as any, signal: ac.signal }), /Aborted/);
+  await assert.rejects(runAgent("q", { client: { messages: { create: async () => ({}) } } as any, signal: ac.signal }), (e: Error) => e.name === "AbortError");
 });

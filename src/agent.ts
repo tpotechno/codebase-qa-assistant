@@ -55,7 +55,11 @@ export async function runAgent(question: string, opts: AgentOptions = {}): Promi
   let toolCalls = 0;
 
   for (let turn = 1; turn <= maxTurns; turn++) {
-    if (opts.signal?.aborted) throw new Error("Aborted");
+    if (opts.signal?.aborted) {
+      // The signal's reason is a DOMException named "AbortError" unless the caller supplied one.
+      const reason = opts.signal.reason;
+      throw reason instanceof Error ? reason : Object.assign(new Error("Aborted"), { name: "AbortError" });
+    }
     const params: Anthropic.MessageCreateParamsNonStreaming = {
       model,
       max_tokens: opts.maxTokens ?? 2048,

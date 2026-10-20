@@ -247,6 +247,45 @@ test("DraftStore expires old drafts and keeps a bounded number", async () => {
   assert.ok(bounded.get(ids[4]));
 });
 
+test("a run that stalls is cancelled after the timeout and frees its slot", async () => {
+  const hung = () =>
+    (async function* () {
+      yield { type: "system", subtype: "init", mcp_servers: [{ name: "codebase-qa", status: "connected" }] };
+      await new Promise(() => {}); // never finishes
+    })() as any;
+  const app = await startApp({ runTimeoutMs: 150, reviewQuery: hung, maxConcurrentRuns: 1 });
+  try {
+    const run = async () => {
+      const res = await fetch(`${app.base}/api/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pr: "acme/widgets#7" }) });
+      return res.text();
+    };
+    assert.match(await run(), /event: error\ndata: \{"message":"Stopped: no result after 1 seconds/);
+    assert.match(await run(), /event: started/, "the slot was released, so a second run can start");
+  } finally {
+    app.server.close();
+  }
+});
+
+test("each review fetches the PR fresh, even right after another", async () => {
+  const prFetches = () => gh.requests.filter((r) => r.method === "GET" && /\/pulls\/7$/.test(r.path)).length;
+  await sse("/api/review", { pr: "acme/widgets#7" });
+  const before = prFetches();
+  await sse("/api/review", { pr: "acme/widgets#7" });
+  assert.equal(prFetches(), before + 1, "not served from the 60s cache");
+});
+
+test("DraftStore never evicts a draft that is being posted", () => {
+  const ref = { owner: "acme", repo: "widgets", number: 7 };
+  const store = new DraftStore(60_000, 2);
+  const a = store.add(ref, HEAD_SHA, review as any);
+  store.get(a)!.state = "posting";
+  const b = store.add(ref, HEAD_SHA, review as any);
+  const c = store.add(ref, HEAD_SHA, review as any);
+  assert.ok(store.get(a), "mid-post draft kept");
+  assert.equal(store.get(b), undefined, "oldest idle draft evicted instead");
+  assert.ok(store.get(c));
+});
+
 test("parsePort accepts valid ports and rejects junk", () => {
   assert.equal(parsePort(undefined, 3334), 3334);
   assert.equal(parsePort(" ", 3334), 3334);
