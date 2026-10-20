@@ -61,6 +61,28 @@ if (!mcpUrl) {
   mcpUrl = embedded.url;
 }
 
+// With --post against an external server, confirm it can actually post *before* paying
+// for a review. The embedded server is started with allowPost, so it needs no check.
+if (post && !embedded) {
+  let canPost = false;
+  try {
+    const probe = await mcpToolProvider(mcpUrl, mcpToken);
+    canPost = (await probe.listTools()).some((t) => t.name === "post_review");
+    await probe.close();
+  } catch (e) {
+    console.error(`Could not connect to MCP server at ${mcpUrl}: ${(e as Error).message}`);
+    process.exit(1);
+  }
+  if (!canPost) {
+    console.error(
+      `The MCP server at ${mcpUrl} has posting turned off, so --post would fail after the review.\n` +
+        "Either remove MCP_SERVER_URL from .env (review then starts its own server that can post),\n" +
+        "or restart `npm run serve` with GITHUB_TOKEN and GITHUB_ALLOW_POST=true in .env.",
+    );
+    process.exit(1);
+  }
+}
+
 console.error(`Reviewing ${formatPrRef(ref)} (tools: ${embedded ? "embedded MCP server" : mcpUrl})\n`);
 
 try {
