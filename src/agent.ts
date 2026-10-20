@@ -1,8 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { executeTool, toolDefinitions } from "./tools.ts";
+import { localToolProvider, type ToolProvider } from "./tool-provider.ts";
 
 const SYSTEM_PROMPT = `You are a senior engineer answering questions about a codebase.
-Use the search_code and read_file tools to ground every answer in the actual code.
+Use the available tools to ground every answer in the actual code and docs.
+- Use search_docs for intent and design questions, search_code to locate symbols.
 - Search before you read; read only the ranges you need.
 - Cite files as path:line when you reference code.
 - If the code doesn't answer the question, say so instead of guessing.
@@ -14,6 +15,8 @@ export interface AgentOptions {
   maxTokens?: number;
   /** Called for each tool call so a CLI or UI can show progress. */
   onToolCall?: (name: string, input: unknown) => void;
+  /** Where tools come from (in-process or an MCP server). Defaults to local. */
+  tools?: ToolProvider;
   /** Injectable for tests. */
   client?: Pick<Anthropic, "messages">;
 }
@@ -35,6 +38,8 @@ export async function runAgent(question: string, opts: AgentOptions = {}): Promi
   const client = opts.client ?? new Anthropic();
   const model = opts.model ?? process.env.CLAUDE_MODEL ?? "claude-sonnet-5-5";
   const maxTurns = opts.maxTurns ?? 10;
+  const provider = opts.tools ?? localToolProvider();
+  const tools = await provider.listTools();
 
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: question }];
   const usage = { inputTokens: 0, outputTokens: 0 };
@@ -45,7 +50,7 @@ export async function runAgent(question: string, opts: AgentOptions = {}): Promi
       model,
       max_tokens: opts.maxTokens ?? 2048,
       system: SYSTEM_PROMPT,
-      tools: toolDefinitions,
+      tools,
       messages,
     });
 
@@ -73,8 +78,7 @@ export async function runAgent(question: string, opts: AgentOptions = {}): Promi
       let content: string;
       let isError = false;
       try {
-        content = await executeTool(use.name, use.input);
-        isError = content.startsWith("Error:");
+        ({ content, isError } = await provider.callTool(use.name, use.input));
       } catch (e) {
         content = `Error: ${(e as Error).message}`;
         isError = true;

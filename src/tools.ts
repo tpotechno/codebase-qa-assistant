@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
+import { searchDocsText } from "./docs.ts";
 
 // Directories we never walk into.
 const SKIP_DIRS = new Set([
@@ -168,13 +169,35 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
 ];
 
+toolDefinitions.push({
+  name: "search_docs",
+  description:
+    "Search the repository's documentation (READMEs, design docs, ADRs) for passages relevant " +
+    "to a natural-language question. Returns ranked chunks with file:line and heading. " +
+    "Use this for 'why' and 'how is this meant to work' questions; use search_code for symbols.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Natural-language question or keywords." },
+      k: { type: "integer", description: "Number of passages to return (1-10, default 5)." },
+    },
+    required: ["query"],
+  },
+});
+
+export interface DocsInput { query: string; k?: number }
+
 /** Dispatch a tool_use block from Claude to its implementation. */
-export async function executeTool(name: string, input: unknown): Promise<string> {
+export async function executeTool(name: string, input: unknown, root = repoRoot()): Promise<string> {
   switch (name) {
     case "search_code":
-      return searchCode(input as SearchInput);
+      return searchCode(input as SearchInput, root);
     case "read_file":
-      return readFile(input as ReadInput);
+      return readFile(input as ReadInput, root);
+    case "search_docs": {
+      const { query, k } = input as DocsInput;
+      return searchDocsText(root, query, k);
+    }
     default:
       return `Error: unknown tool "${name}".`;
   }

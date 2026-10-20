@@ -1,19 +1,23 @@
 # Codebase Q&A and PR Review Assistant
 
-An agentic assistant built on the Claude API that answers questions about a codebase and drafts pull-request review comments. It is grounded in the actual code through task-shaped tools, and in later phases it exposes those tools through a custom MCP server.
+An agentic assistant built on the Claude API that answers questions about a codebase, grounded in the actual code and docs. Its tools are served by a custom **MCP server** over Streamable HTTP, so the same tools work for this app, Claude Code, and any other MCP client.
 
-**Stack:** TypeScript / Node, Claude API (`@anthropic-ai/sdk`), Angular front end (Phase 4).
+**Stack:** TypeScript / Node, Claude API (`@anthropic-ai/sdk`), Model Context Protocol (`@modelcontextprotocol/sdk`), Express. Angular front end in Phase 4.
 
 ## Status
 
-**Phase 1 — complete.** A hand-written Messages API tool loop with two tools:
+- **Phase 1 — complete.** Hand-written Messages API tool loop.
+- **Phase 2 — complete.** Custom MCP server (Streamable HTTP) with code search, file reading, and documentation retrieval; the agent discovers its tools from the server at runtime.
+
+### Tools
 
 | Tool | What it does |
 |---|---|
-| `search_code` | Case-insensitive search across text files; returns `file:line` hits with context, capped at `k` results |
-| `read_file` | Reads a file with line numbers, 200 lines per call, refuses any path outside the repo root |
+| `search_code` | Case-insensitive search across text files; returns `file:line` hits with context, capped at `k` |
+| `read_file` | Reads a file with line numbers, 200 lines per call; refuses any path outside the repo root |
+| `search_docs` | Retrieval over READMEs, design docs, and ADRs: heading-aware chunking + BM25 ranking, returns cited passages |
 
-The loop (`src/agent.ts`): call Claude → run any `tool_use` blocks → return `tool_result` blocks (errors flagged with `is_error`) → repeat until Claude answers or a turn limit is hit. Token usage is tracked per run.
+All three are marked read-only (`readOnlyHint`), validate their inputs with zod schemas, and return compact output to keep context and token use down.
 
 ## Quick start (Windows / PowerShell)
 
@@ -24,11 +28,45 @@ Copy-Item .env.example .env
 npm run ask -- "Where is the HTTP interceptor configured, and what does it add to requests?"
 ```
 
-Tool calls print to stderr as they happen (`↳ search_code {...}`), followed by the answer and a token summary.
+Without `MCP_SERVER_URL` set, tools run in-process (Phase 1 mode). Tool calls print to stderr as they happen (`↳ search_code {...}`), followed by the answer and a token summary.
+
+### Using the MCP server
+
+Terminal 1 — start the server:
+```powershell
+npm run serve
+# MCP server "codebase-qa" listening at http://127.0.0.1:3333/mcp
+```
+
+Terminal 2 — set `MCP_SERVER_URL=http://127.0.0.1:3333/mcp` in `.env`, then ask as usual:
+```powershell
+npm run ask -- "Why does the server refuse to bind to 0.0.0.0 without a token?"
+# Tools: mcp:http://127.0.0.1:3333/mcp
+```
+
+### Using the MCP server from Claude Code
+
+With the server running:
+```powershell
+claude mcp add --transport http codebase-qa http://127.0.0.1:3333/mcp
+```
+Claude Code can then call `search_code`, `read_file`, and `search_docs` against your repo.
+
+### Server configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REPO_PATH` | current folder | Repository the tools are confined to |
+| `MCP_PORT` | `3333` | Port to listen on |
+| `MCP_HOST` | `127.0.0.1` | Bind address; local-only by default, with DNS-rebinding protection |
+| `MCP_AUTH_TOKEN` | — | If set, clients must send `Authorization: Bearer <token>`. **Required** for any non-local host |
+
+`GET /health` returns server name and version without auth, for uptime checks.
 
 ### Troubleshooting
 
 - **`401 invalid x-api-key`** — the key was rejected. Values in `.env` take priority over Windows environment variables, so check the `.env` line is exactly `ANTHROPIC_API_KEY=sk-ant-...` (no quotes or spaces), or create a new key in the Console.
+- **`Could not connect to MCP server`** — start it with `npm run serve` in another terminal, or remove `MCP_SERVER_URL` from `.env` to use local tools.
 - **`npm.ps1 cannot be loaded ... not digitally signed`** — run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `npm.cmd` instead of `npm`.
 - **npm 12 `install-scripts` warning for esbuild** — run `npm install-scripts approve esbuild`, then `npm install`.
 
@@ -39,28 +77,36 @@ npm run typecheck
 npm test
 ```
 
-Tests run without an API key: the tools are tested directly, and the agent loop is tested against a scripted fake Claude client (tool round-trips, error flagging, the turn limit).
+17 tests, no API key needed. They cover the tools directly, document chunking and ranking, and the MCP server over real HTTP: tool discovery, schema validation, path-traversal refusal, bearer-token auth, and the full agent loop running against the server with a scripted fake Claude client.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│  Angular front end (chat UI + streaming)     │  Phase 4
-├─────────────────────────────────────────────┤
-│  Node/TS backend — agent orchestration       │  Phase 1 (hand loop) → Phase 3 (Agent SDK)
-├─────────────────────────────────────────────┤
-│  MCP server (TypeScript, remote HTTP)        │  Phase 2
-├─────────────────────────────────────────────┤
-│  Data layer: Git repo + doc index (RAG)      │  Phase 2
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│  Angular front end (chat UI + streaming)      │  Phase 4
+├──────────────────────────────────────────────┤
+│  Agent (src/agent.ts) — Messages API loop     │  Phase 1 → Agent SDK in Phase 3
+│    └─ ToolProvider: local | MCP client        │  Phase 2
+├──────────────────────────────────────────────┤
+│  MCP server (src/mcp-server.ts)               │  Phase 2
+│    Streamable HTTP · stateless · bearer auth  │
+├──────────────────────────────────────────────┤
+│  Data: repo files + doc index (BM25)          │  Phase 2
+└──────────────────────────────────────────────┘
 ```
+
+**Design notes**
+
+- **Client-side MCP.** The agent connects to the server with the MCP client SDK, lists its tools, and translates them into Messages API tool definitions. This works against a server on `localhost`. (The Messages API's built-in MCP connector needs a publicly reachable server, which fits the hosted deployment in Phase 5.)
+- **Pluggable tool source.** The agent loop depends only on a `ToolProvider` interface, so in-process tools and MCP tools are interchangeable — and new server tools reach the agent with no agent code change.
+- **Stateless server.** Each request gets a fresh server and transport, so it can scale horizontally behind a load balancer.
+- **Lexical retrieval first.** `search_docs` uses BM25 with no embedding model or vector store. It exposes the same query → cited passages interface an embedding retriever would, so it can be upgraded without touching the tool contract.
 
 ## Roadmap
 
-- **Phase 2 — MCP server + RAG.** Move `search_code` / `read_file` behind a remote HTTP MCP server, and add `search_docs` over READMEs and design docs. The same tools then serve both this app and Claude Code.
-- **Phase 3 — PR review.** Add `get_pr_diff` and `post_review_comment` (GitHub API), and move orchestration to the Agent SDK.
+- **Phase 3 — PR review.** Add `get_pr_diff` and `post_review_comment` (GitHub API) to the MCP server, and move orchestration to the Agent SDK.
 - **Phase 4 — Angular UI.** Chat interface with streaming answers and a visible tool-call trace.
-- **Phase 5 — Production.** Evaluation suite (answer grounding, review quality), cost limits, tracing, public demo deployment.
+- **Phase 5 — Production.** Evaluation suite (answer grounding, review quality), cost limits, tracing, and a public demo deployment of the MCP server.
 
 ## License
 
