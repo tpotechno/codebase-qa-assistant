@@ -4,7 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { createWebApp } from "../src/web-app.ts";
+import { DraftStore, createWebApp, parsePort } from "../src/web-app.ts";
 import { startHttpServer } from "../src/mcp-server.ts";
 import { GitHubClient } from "../src/github.ts";
 import { mcpToolProvider } from "../src/tool-provider.ts";
@@ -159,6 +159,7 @@ test("POST /api/review streams started, tool calls, and the structured review", 
   assert.equal(events[1].data.name, "get_pr_diff");
   assert.deepEqual(events[2].data.review, review);
   assert.equal(events[2].data.headSha, HEAD_SHA);
+  assert.match(events[2].data.draftId, /^[0-9a-f-]{36}$/);
 });
 
 test("POST /api/review reports bad and missing PRs", async () => {
@@ -169,32 +170,88 @@ test("POST /api/review reports bad and missing PRs", async () => {
   assert.match(missing[0].data.message, /GitHub 404/);
 });
 
-test("POST /api/review/post publishes the exact draft as a COMMENT", async () => {
-  const res = await postJson("/api/review/post", { pr: "acme/widgets#7", headSha: HEAD_SHA, review });
+/** Run a review through the API and return the draft id the server issued. */
+async function reviewDraftId(): Promise<string> {
+  const events = await sse("/api/review", { pr: "acme/widgets#7" });
+  return events.find((e) => e.event === "done")!.data.draftId;
+}
+
+test("POST /api/review/post publishes the server's draft as a COMMENT, exactly once", async () => {
+  const draftId = await reviewDraftId();
+  const res = await postJson("/api/review/post", { draftId });
   assert.equal(res.status, 200);
-  assert.equal((await res.json()).inlineCount, 1);
+  const posted = await res.json();
+  assert.equal(posted.inlineCount, 1);
   const sent = gh.requests.filter((r) => r.method === "POST").at(-1)!.body;
   assert.equal(sent.event, "COMMENT");
   assert.equal(sent.comments[0].body, "**blocker:** Default to 3000 when PORT is unset.");
+
+  const again = await postJson("/api/review/post", { draftId });
+  assert.equal(again.status, 409);
+  assert.match((await again.json()).error, new RegExp(`already posted: ${posted.url.replace(/[.#]/g, "\\$&")}`));
 });
 
-test("POST /api/review/post refuses stale commits, bad input, and missing tokens", async () => {
-  const stale = await postJson("/api/review/post", { pr: "acme/widgets#7", headSha: "f".repeat(40), review });
-  assert.equal(stale.status, 409);
-  const invalid = await postJson("/api/review/post", { pr: "acme/widgets#7", headSha: "nope", review });
-  assert.equal(invalid.status, 400);
+test("two simultaneous posts of one draft publish once", async () => {
+  const draftId = await reviewDraftId();
+  const before = gh.requests.filter((r) => r.method === "POST").length;
+  const [a, b] = await Promise.all([postJson("/api/review/post", { draftId }), postJson("/api/review/post", { draftId })]);
+  assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+  assert.equal(gh.requests.filter((r) => r.method === "POST").length, before + 1);
+});
+
+test("only drafts the server produced can be posted; client-supplied review text is rejected", async () => {
+  const unknown = await postJson("/api/review/post", { draftId: "00000000-0000-4000-8000-000000000000" });
+  assert.equal(unknown.status, 404);
+  const forged = await postJson("/api/review/post", { pr: "acme/widgets#7", headSha: HEAD_SHA, review });
+  assert.equal(forged.status, 400);
+});
+
+test("posting refuses a stale commit (typed 409) and leaves the draft retryable; no token means 403", async () => {
+  const drafts = new DraftStore();
+  const app = await startApp({ drafts });
+  try {
+    const staleId = drafts.add({ owner: "acme", repo: "widgets", number: 7 }, "f".repeat(40), review as any);
+    const post = () =>
+      fetch(`${app.base}/api/review/post`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draftId: staleId }) });
+    const r1 = await post();
+    assert.equal(r1.status, 409);
+    assert.match((await r1.json()).error, /new commits since it was reviewed/);
+    assert.equal((await post()).status, 409, "still refused for the same reason, not 'already posting'");
+  } finally {
+    app.server.close();
+  }
 
   const noToken = await startApp({ canPost: false });
   try {
     const r = await fetch(`${noToken.base}/api/review/post`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pr: "acme/widgets#7", headSha: HEAD_SHA, review }),
+      body: JSON.stringify({ draftId: "00000000-0000-4000-8000-000000000000" }),
     });
     assert.equal(r.status, 403);
   } finally {
     noToken.server.close();
   }
+});
+
+test("DraftStore expires old drafts and keeps a bounded number", async () => {
+  const ref = { owner: "acme", repo: "widgets", number: 7 };
+  const expiring = new DraftStore(1);
+  const id = expiring.add(ref, HEAD_SHA, review as any);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(expiring.get(id), undefined);
+
+  const bounded = new DraftStore(60_000, 3);
+  const ids = Array.from({ length: 5 }, () => bounded.add(ref, HEAD_SHA, review as any));
+  assert.equal(bounded.get(ids[0]), undefined, "oldest evicted");
+  assert.ok(bounded.get(ids[4]));
+});
+
+test("parsePort accepts valid ports and rejects junk", () => {
+  assert.equal(parsePort(undefined, 3334), 3334);
+  assert.equal(parsePort(" ", 3334), 3334);
+  assert.equal(parsePort("8080", 3334), 8080);
+  for (const bad of ["abc", "0", "65536", "80.5", "-1"]) assert.throws(() => parsePort(bad, 3334), /1 to 65535/);
 });
 
 test("cross-site requests are rejected: foreign Origin, non-JSON body, foreign Host", async () => {

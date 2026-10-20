@@ -82,6 +82,7 @@ export class Review {
 
   private controller: AbortController | null = null;
   private stepCount = 0;
+  private draftId = '';
 
   async submit(): Promise<void> {
     const pr = this.draft().trim();
@@ -97,6 +98,7 @@ export class Review {
     this.postResult.set(null);
     this.postError.set('');
     this.stepCount = 0;
+    this.draftId = '';
     this.running.set(true);
     this.controller = new AbortController();
 
@@ -133,6 +135,7 @@ export class Review {
       }
       case 'done':
         this.review.set(e.data.review);
+        this.draftId = e.data.draftId;
         this.stats.set({ costUsd: e.data.costUsd, turns: e.data.turns, durationMs: e.data.durationMs });
         break;
       case 'error':
@@ -146,13 +149,11 @@ export class Review {
   }
 
   protected async post(): Promise<void> {
-    const started = this.started();
-    const review = this.review();
-    if (!started || !review) return;
+    if (!this.draftId || this.postState() === 'posting') return;
     this.postState.set('posting');
     this.postError.set('');
     try {
-      this.postResult.set(await this.api.postReview(started.pr, started.headSha, review));
+      this.postResult.set(await this.api.postReview(this.draftId));
       this.postState.set('posted');
     } catch (e) {
       this.postError.set((e as Error).message);

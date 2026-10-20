@@ -152,6 +152,20 @@ export interface GitHubClientOptions {
 const MAX_CACHED_PRS = 50;
 const MAX_FILE_PAGES = 30; // GitHub caps the files endpoint at 3,000 files (30 x 100)
 
+/** The PR has commits newer than the one a review was based on. */
+export class StaleHeadError extends Error {
+  constructor(
+    readonly reviewedSha: string,
+    readonly currentSha: string,
+  ) {
+    super(
+      `The PR has new commits since it was reviewed (reviewed ${reviewedSha.slice(0, 7)}, ` +
+        `now ${currentSha.slice(0, 7)}). Re-run the review so comments land on the right lines.`,
+    );
+    this.name = "StaleHeadError";
+  }
+}
+
 export class GitHubClient {
   private readonly token?: string;
   private readonly baseUrl: string;
@@ -262,10 +276,7 @@ export class GitHubClient {
     // Always fresh: line validation and commit_id must match the PR as it is right now.
     const pr = await this.getPr(ref, { fresh: true });
     if (opts.expectedHeadSha && opts.expectedHeadSha !== pr.headSha) {
-      throw new Error(
-        `The PR has new commits since it was reviewed (reviewed ${opts.expectedHeadSha.slice(0, 7)}, ` +
-          `now ${pr.headSha.slice(0, 7)}). Re-run the review so comments land on the right lines.`,
-      );
+      throw new StaleHeadError(opts.expectedHeadSha, pr.headSha);
     }
     const lineSets = new Map(pr.files.map((f) => [f.filename, parsePatch(f.patch).commentableLines]));
 

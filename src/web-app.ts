@@ -1,11 +1,12 @@
 import path from "node:path";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import express, { type Request, type Response, type NextFunction, type Express } from "express";
 import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import { runAgent } from "./agent.ts";
-import { formatPrRef, parsePrRef, type GitHubClient } from "./github.ts";
-import { formatReviewMarkdown, inlineCommentBody, runReview, type ReviewOptions } from "./review.ts";
+import { StaleHeadError, formatPrRef, parsePrRef, type GitHubClient, type PrRef, type PostReviewResult } from "./github.ts";
+import { formatReviewMarkdown, inlineCommentBody, runReview, type Review, type ReviewOptions } from "./review.ts";
 import type { ToolProvider } from "./tool-provider.ts";
 
 /**
@@ -14,7 +15,7 @@ import type { ToolProvider } from "./tool-provider.ts";
  *   GET  /api/config        what the UI needs to render (repo, model, whether posting is possible)
  *   POST /api/ask           streams an answer as Server-Sent Events
  *   POST /api/review        streams a PR review as Server-Sent Events
- *   POST /api/review/post   publishes the exact draft the user just read
+ *   POST /api/review/post   publishes a draft this server produced, by id, at most once
  *
  * The server holds the Anthropic and GitHub credentials, so it only answers same-origin
  * requests from localhost (see guardRequests).
@@ -39,6 +40,7 @@ export interface WebAppDeps {
   anthropic?: Pick<Anthropic, "messages">;
   reviewQuery?: ReviewOptions["queryFn"];
   maxConcurrentRuns?: number;
+  drafts?: DraftStore;
 }
 
 const PREVIEW_CHARS = 600;
@@ -101,26 +103,61 @@ function guardRequests(allowedHosts: string[]) {
   };
 }
 
+/** Parse a TCP port from the environment: unset or blank means the fallback. */
+export function parsePort(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65_535) {
+    throw new Error(`Port must be a whole number from 1 to 65535 (got "${raw}").`);
+  }
+  return n;
+}
+
+interface Draft {
+  ref: PrRef;
+  headSha: string;
+  review: Review;
+  createdAt: number;
+  state: "ready" | "posting" | "posted";
+  posted?: PostReviewResult;
+}
+
+/**
+ * Reviews this server produced, kept briefly so they can be posted by id. Posting only
+ * what the server generated means nothing else that can reach the API (a script, or an
+ * injected page) can publish arbitrary text under the user's GitHub identity, and each
+ * draft can be posted at most once.
+ */
+export class DraftStore {
+  private readonly drafts = new Map<string, Draft>();
+
+  constructor(
+    private readonly ttlMs = 60 * 60_000,
+    private readonly max = 20,
+  ) {}
+
+  add(ref: PrRef, headSha: string, review: Review): string {
+    this.prune();
+    while (this.drafts.size >= this.max) this.drafts.delete(this.drafts.keys().next().value!);
+    const id = randomUUID();
+    this.drafts.set(id, { ref, headSha, review, createdAt: Date.now(), state: "ready" });
+    return id;
+  }
+
+  get(id: string): Draft | undefined {
+    this.prune();
+    return this.drafts.get(id);
+  }
+
+  private prune(): void {
+    const now = Date.now();
+    for (const [id, d] of this.drafts) if (now - d.createdAt >= this.ttlMs) this.drafts.delete(id);
+  }
+}
+
 const askBody = z.object({ question: z.string().trim().min(1).max(4_000) });
 const reviewBody = z.object({ pr: z.string().trim().min(1).max(300) });
-const postBody = z.object({
-  pr: z.string().trim().min(1).max(300),
-  headSha: z.string().regex(/^[0-9a-f]{40}$/),
-  review: z.object({
-    summary: z.string().min(1).max(20_000),
-    verdict: z.enum(["looks_good", "minor_issues", "needs_changes"]),
-    comments: z
-      .array(
-        z.object({
-          path: z.string().min(1).max(500),
-          line: z.number().int().min(1),
-          severity: z.enum(["blocker", "suggestion", "nit"]),
-          body: z.string().min(1).max(10_000),
-        }),
-      )
-      .max(50),
-  }),
-});
+const postBody = z.object({ draftId: z.string().uuid() });
 
 const badRequest = (res: Response, error: z.ZodError | Error) =>
   res.status(400).json({
@@ -133,6 +170,7 @@ export function createWebApp(deps: WebAppDeps): Express {
   app.use(guardRequests(deps.allowedHosts));
   app.use(express.json({ limit: "256kb" }));
 
+  const drafts = deps.drafts ?? new DraftStore();
   let activeRuns = 0;
   const maxRuns = deps.maxConcurrentRuns ?? 2;
   const claimRun = (res: Response) => {
@@ -197,6 +235,7 @@ export function createWebApp(deps: WebAppDeps): Express {
     try {
       // Read the PR first: validates it exists and pins the commit the review is based on.
       const pr = await deps.github.getPr(ref);
+      if (abort.signal.aborted) return; // the browser left while the PR was loading
       send("started", { pr: formatPrRef(ref), title: pr.title, url: pr.url, headSha: pr.headSha, files: pr.changedFiles });
       const result = await runReview(ref, {
         mcpUrl: deps.mcp.url,
@@ -209,6 +248,7 @@ export function createWebApp(deps: WebAppDeps): Express {
       });
       send("done", {
         review: result.review,
+        draftId: drafts.add(ref, pr.headSha, result.review),
         costUsd: result.costUsd,
         turns: result.turns,
         durationMs: result.durationMs,
@@ -228,19 +268,31 @@ export function createWebApp(deps: WebAppDeps): Express {
     }
     const parsed = postBody.safeParse(req.body);
     if (!parsed.success) return badRequest(res, parsed.error);
+
+    const draft = drafts.get(parsed.data.draftId);
+    if (!draft) {
+      return res.status(404).json({ error: "This review is no longer available to post. Run the review again." });
+    }
+    if (draft.state === "posting") return res.status(409).json({ error: "This review is already being posted." });
+    if (draft.state === "posted") {
+      return res.status(409).json({ error: `This review was already posted: ${draft.posted!.url}` });
+    }
+
+    draft.state = "posting"; // claimed before any await, so a second request can't slip in
     try {
-      const ref = parsePrRef(parsed.data.pr);
-      const { review, headSha } = parsed.data;
+      const { ref, review, headSha } = draft;
       const r = await deps.github.postReview(
         ref,
         formatReviewMarkdown(ref, review, { includeInline: false }),
         review.comments.map((c) => ({ path: c.path, line: c.line, body: inlineCommentBody(c) })),
         { expectedHeadSha: headSha },
       );
+      draft.state = "posted";
+      draft.posted = r;
       res.json(r);
     } catch (e) {
-      const message = (e as Error).message;
-      res.status(/new commits/.test(message) ? 409 : 502).json({ error: message });
+      draft.state = "ready";
+      res.status(e instanceof StaleHeadError ? 409 : 502).json({ error: (e as Error).message });
     }
   });
 

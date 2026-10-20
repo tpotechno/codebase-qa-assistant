@@ -64,6 +64,9 @@ export async function runAgent(question: string, opts: AgentOptions = {}): Promi
       messages,
     };
     let response: Anthropic.Message;
+    // Stream when the caller wants text as it arrives. Clients without stream() (the test
+    // fakes) fall back to create(), and onText is simply not called. On abort, the SDK
+    // rejects finalMessage() with an abort error, so the loop can't hang mid-stream.
     if (opts.onText && typeof client.messages.stream === "function") {
       const stream = client.messages.stream(params, { signal: opts.signal });
       stream.on("text", (delta) => opts.onText!(delta, turn));

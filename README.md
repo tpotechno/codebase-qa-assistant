@@ -91,7 +91,7 @@ npm run web           # http://localhost:3334
 Uses the same `.env` as the command line. Two modes:
 
 - **Ask a question.** The answer streams in as it's written. The Steps panel shows each tool call as it happens (what was searched, which lines were read) with the result one click away. Short notes Claude writes before calling a tool appear there too, so the answer itself stays clean.
-- **Review a pull request.** Enter `owner/repo#123` or a PR link. You get the verdict, the summary, and comments grouped by file with their line numbers. **Post to GitHub** publishes exactly the draft on screen, as a comment, and is refused if the PR has new commits since the review started.
+- **Review a pull request.** Enter `owner/repo#123` or a PR link. You get the verdict, the summary, and comments grouped by file with their line numbers. **Post to GitHub** publishes exactly the draft on screen, as a comment: the server keeps each review it generates and posts it by id, at most once, and refuses if the PR has new commits since the review started.
 
 ![Reviewing a pull request: verdict, summary, and line comments grouped by file](docs/screenshots/review.png)
 
@@ -99,7 +99,7 @@ Uses the same `.env` as the command line. Two modes:
 
 **Developing the UI:** run `npm run web` in one terminal and `npm run web:dev` in another, then open http://localhost:4200. `ng serve` reloads on save and proxies `/api` to the server.
 
-**Security.** The server holds your Anthropic and GitHub credentials, so it listens on `127.0.0.1` only and rejects requests whose `Host` isn't its own (DNS rebinding), requests from other sites' pages (`Origin` check), and anything that isn't JSON (cross-site forms). Closing the tab or pressing **Stop** cancels the run, so it stops spending. At most two runs can be active at once.
+**Security.** The server holds your Anthropic and GitHub credentials, so it listens on `127.0.0.1` only and rejects requests whose `Host` isn't its own (DNS rebinding), requests from other sites' pages (`Origin` check), and anything that isn't JSON (cross-site forms). Only reviews the server itself produced can be posted (by id, once each, for an hour), so nothing that reaches the API can publish arbitrary text under your GitHub account. Raw HTML in model output is shown as text. Closing the tab or pressing **Stop** cancels the run, so it stops spending. At most two runs can be active at once.
 
 | Variable | Default | Purpose |
 |---|---|---|

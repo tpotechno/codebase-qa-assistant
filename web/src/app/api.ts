@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { AppConfig, PostResult, Review } from './models';
+import { AppConfig, PostResult } from './models';
 import { SseEvent, SseParser } from './sse';
 
 async function errorFrom(res: Response): Promise<Error> {
@@ -35,11 +35,12 @@ export class Api {
     }
   }
 
-  async postReview(pr: string, headSha: string, review: Review): Promise<PostResult> {
+  /** Post a review the server produced. The server looks the draft up by id and posts it once. */
+  async postReview(draftId: string): Promise<PostResult> {
     const res = await fetch('/api/review/post', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr, headSha, review }),
+      body: JSON.stringify({ draftId }),
     });
     if (!res.ok) throw await errorFrom(res);
     return res.json();

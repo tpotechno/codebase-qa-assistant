@@ -9,7 +9,7 @@ import { GitHubClient } from "./github.ts";
 import { mcpToolProvider } from "./tool-provider.ts";
 import { repoRoot } from "./tools.ts";
 import { parseBudget } from "./review.ts";
-import { createWebApp } from "./web-app.ts";
+import { createWebApp, parsePort } from "./web-app.ts";
 
 if (!process.env.ANTHROPIC_API_KEY) {
   console.error("ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add your key.");
@@ -24,7 +24,13 @@ try {
   process.exit(1);
 }
 
-const port = Number(process.env.WEB_PORT ?? 3334);
+let port: number;
+try {
+  port = parsePort(process.env.WEB_PORT, 3334);
+} catch (e) {
+  console.error(`WEB_PORT: ${(e as Error).message}`);
+  process.exit(1);
+}
 const root = repoRoot();
 const githubToken = process.env.GITHUB_TOKEN || undefined;
 const github = new GitHubClient({ token: githubToken });
@@ -44,11 +50,11 @@ const app = createWebApp({
   maxBudgetUsd: maxBudgetUsd!,
   openTools: () => mcpToolProvider(mcp.url, mcpToken),
   mcp: { url: mcp.url, token: mcpToken },
-  allowedHosts: [`localhost:${port}`, `127.0.0.1:${port}`],
+  allowedHosts: [`localhost:${port!}`, `127.0.0.1:${port!}`],
   staticDir: path.resolve(here, "../web/dist/web/browser"),
 });
 
-app.listen(port, "127.0.0.1", () => {
+app.listen(port!, "127.0.0.1", () => {
   console.error(`Codebase Q&A web UI: http://localhost:${port}`);
   console.error(`Repo: ${root}`);
   console.error(`GitHub: ${githubToken ? "token set (posting available)" : "no token (public PRs only, no posting)"}`);

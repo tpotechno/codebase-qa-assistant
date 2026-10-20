@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, extractHeadSha, formatPrDiff, isGeneratedFile, formatPrSummary, neutralizeMentions, parsePatch, parsePrRef } from "../src/github.ts";
+import { GitHubClient, StaleHeadError, extractHeadSha, formatPrDiff, isGeneratedFile, formatPrSummary, neutralizeMentions, parsePatch, parsePrRef } from "../src/github.ts";
 import { HEAD_SHA, PATCH, fakeGitHub } from "./fixtures/fake-github.ts";
 
 const ref = { owner: "acme", repo: "widgets", number: 7 };
@@ -144,6 +144,7 @@ test("postReview refuses when the PR moved past the reviewed commit", async () =
     /new commits since it was reviewed \(reviewed fffffff, now a1b2c3d\)/,
   );
   assert.ok(!gh.requests.some((r) => r.method === "POST"), "nothing posted");
+  await assert.rejects(client.postReview(ref, "body", [], { expectedHeadSha: "f".repeat(40) }), (e) => e instanceof StaleHeadError && e.currentSha === HEAD_SHA);
   const ok = await client.postReview(ref, "body", [], { expectedHeadSha: HEAD_SHA });
   assert.match(ok.url, /pullrequestreview/);
 });
