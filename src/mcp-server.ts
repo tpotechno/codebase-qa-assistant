@@ -152,12 +152,17 @@ export function createMcpServer(root: string, opts: McpServerOptions = {}): McpS
             .max(50)
             .default([])
             .describe("Inline comments on new-file lines."),
+          head_sha: z
+            .string()
+            .regex(/^[0-9a-f]{40}$/)
+            .optional()
+            .describe("Head commit the review was based on (from get_pr). If the PR has moved on, posting is refused."),
         },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       },
-      async ({ pr, body, comments }) =>
+      async ({ pr, body, comments, head_sha }) =>
         guard(async () => {
-          const r = await github.postReview(parsePrRef(pr), body, comments);
+          const r = await github.postReview(parsePrRef(pr), body, comments, { expectedHeadSha: head_sha });
           return `Review posted: ${r.url} (${r.inlineCount} inline comment(s), ${r.foldedCount} moved to the body).`;
         }),
     );
@@ -192,13 +197,15 @@ export interface HttpServerOptions extends McpServerOptions {
 export async function startHttpServer(opts: HttpServerOptions): Promise<{ server: Server; url: string }> {
   const host = opts.host ?? "127.0.0.1";
   const app = createMcpExpressApp({ host });
+  // One client for the server's lifetime (requests are stateless, the PR cache is not).
+  const github = opts.github ?? new GitHubClient();
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true, name: SERVER_NAME, version: SERVER_VERSION });
   });
 
   app.post("/mcp", bearerAuth(opts.token), async (req, res) => {
-    const server = createMcpServer(opts.root, { github: opts.github, allowPost: opts.allowPost });
+    const server = createMcpServer(opts.root, { github, allowPost: opts.allowPost });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

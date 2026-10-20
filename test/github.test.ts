@@ -85,3 +85,65 @@ test("generated files are collapsed unless requested by path", async () => {
   assert.match(formatPrDiff(pr), /package-lock\.json[^\n]*\n\(generated file; diff omitted/);
   assert.match(formatPrDiff(pr, { path: "package-lock.json" }), /1 \+ b/);
 });
+
+test("parsePatch ignores a trailing newline and CRLF artifacts (no phantom lines)", () => {
+  const withTrailing = parsePatch(`${PATCH}\n`);
+  assert.deepEqual([...withTrailing.commentableLines].sort((a, b) => a - b), [1, 2, 3, 4, 5]);
+  const crlf = parsePatch(PATCH.split("\n").join("\r\n"));
+  assert.deepEqual([...crlf.commentableLines].sort((a, b) => a - b), [1, 2, 3, 4, 5]);
+  assert.doesNotMatch(crlf.annotated, /\r/);
+});
+
+test("a file larger than one page is split into parts, with every line reachable", async () => {
+  const pr = await new GitHubClient({ fetch: fakeGitHub().fetch }).getPr(ref);
+  const n = 3_000;
+  const patch = [`@@ -0,0 +1,${n} @@`, ...Array.from({ length: n }, (_, i) => `+const line${i + 1} = "${"x".repeat(20)}";`)].join("\n");
+  pr.files = [{ filename: "src/big.ts", status: "added", additions: n, deletions: 0, changes: n, patch }];
+
+  for (const opts of [{}, { path: "src/big.ts" }]) {
+    const first = formatPrDiff(pr, opts);
+    const total = Number(/Page 1 of (\d+)/.exec(first)![1]);
+    assert.ok(total > 1);
+    const all = Array.from({ length: total }, (_, i) => formatPrDiff(pr, { ...opts, page: i + 1 })).join("\n");
+    assert.doesNotMatch(all, /truncated/);
+    assert.match(all, /\[part 1 of \d+\]/);
+    assert.match(all, new RegExp(`^\\s+${n} \\+ const line${n} =`, "m"));
+    for (let p = 1; p <= total; p++) assert.ok(formatPrDiff(pr, { ...opts, page: p }).length < 26_000);
+  }
+});
+
+test("getPr is cached briefly, shared across callers, and bypassed with fresh", async () => {
+  const gh = fakeGitHub();
+  const client = new GitHubClient({ fetch: gh.fetch });
+  await Promise.all([client.getPr(ref), client.getPr(ref), client.getPr(ref)]);
+  await client.getPr(ref);
+  assert.equal(gh.requests.length, 2, "one PR fetch + one files fetch for four calls");
+  await client.getPr(ref, { fresh: true });
+  assert.equal(gh.requests.length, 4);
+
+  const noCache = new GitHubClient({ fetch: gh.fetch, cacheTtlMs: 0 });
+  await noCache.getPr(ref);
+  await noCache.getPr(ref);
+  assert.equal(gh.requests.length, 8);
+});
+
+test("failed fetches are not cached", async () => {
+  const gh = fakeGitHub();
+  const client = new GitHubClient({ fetch: gh.fetch });
+  const missing = { ...ref, number: 99 };
+  await assert.rejects(client.getPr(missing));
+  await assert.rejects(client.getPr(missing));
+  assert.equal(gh.requests.length, 2);
+});
+
+test("postReview refuses when the PR moved past the reviewed commit", async () => {
+  const gh = fakeGitHub();
+  const client = new GitHubClient({ token: "t0k", fetch: gh.fetch });
+  await assert.rejects(
+    client.postReview(ref, "body", [], { expectedHeadSha: "f".repeat(40) }),
+    /new commits since it was reviewed \(reviewed fffffff, now abc123\)/,
+  );
+  assert.ok(!gh.requests.some((r) => r.method === "POST"), "nothing posted");
+  const ok = await client.postReview(ref, "body", [], { expectedHeadSha: "abc123" });
+  assert.match(ok.url, /pullrequestreview/);
+});

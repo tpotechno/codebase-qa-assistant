@@ -7,7 +7,7 @@ import { startHttpServer } from "./mcp-server.ts";
 import { GitHubClient, parsePrRef, formatPrRef } from "./github.ts";
 import { mcpToolProvider } from "./tool-provider.ts";
 import { repoRoot } from "./tools.ts";
-import { formatReviewMarkdown, inlineCommentBody, runReview } from "./review.ts";
+import { formatReviewMarkdown, inlineCommentBody, parseBudget, runReview } from "./review.ts";
 
 const USAGE = `Usage: npm run review -- <owner/repo#123 | PR URL> [--post] [--out review.md]
 
@@ -38,6 +38,14 @@ try {
   process.exit(1);
 }
 
+let maxBudgetUsd: number;
+try {
+  maxBudgetUsd = parseBudget(process.env.REVIEW_MAX_BUDGET_USD);
+} catch (e) {
+  console.error((e as Error).message);
+  process.exit(1);
+}
+
 const githubToken = process.env.GITHUB_TOKEN || undefined;
 if (post && !githubToken) {
   console.error("--post needs GITHUB_TOKEN in .env (fine-grained token with Pull requests: read and write).");
@@ -61,16 +69,24 @@ if (!mcpUrl) {
   mcpUrl = embedded.url;
 }
 
-// With --post against an external server, confirm it can actually post *before* paying
-// for a review. The embedded server is started with allowPost, so it needs no check.
-if (post && !embedded) {
+// Before paying for a review with --post: confirm the server can post, and record the PR's
+// head commit so posting can refuse if new commits land while the review runs.
+let reviewedHeadSha: string | undefined;
+if (post) {
   let canPost = false;
   try {
     const probe = await mcpToolProvider(mcpUrl, mcpToken);
-    canPost = (await probe.listTools()).some((t) => t.name === "post_review");
-    await probe.close();
+    try {
+      canPost = (await probe.listTools()).some((t) => t.name === "post_review");
+      const pr = await probe.callTool("get_pr", { pr: formatPrRef(ref) });
+      if (pr.isError) throw new Error(pr.content.replace(/^Error:\s*/, ""));
+      reviewedHeadSha = /^Head: ([0-9a-f]{40})/m.exec(pr.content)?.[1];
+    } finally {
+      await probe.close();
+    }
   } catch (e) {
-    console.error(`Could not connect to MCP server at ${mcpUrl}: ${(e as Error).message}`);
+    console.error(`Could not prepare to post: ${(e as Error).message}`);
+    embedded?.server.close();
     process.exit(1);
   }
   if (!canPost) {
@@ -89,7 +105,7 @@ try {
   const result = await runReview(ref, {
     mcpUrl,
     mcpToken,
-    maxBudgetUsd: Number(process.env.REVIEW_MAX_BUDGET_USD ?? 1),
+    maxBudgetUsd,
     onToolCall: (name, input) => console.error(`  ↳ ${name} ${JSON.stringify(input)}`),
   });
 
@@ -112,6 +128,7 @@ try {
         pr: formatPrRef(ref),
         body: formatReviewMarkdown(ref, result.review, { includeInline: false }),
         comments: result.review.comments.map((c) => ({ path: c.path, line: c.line, body: inlineCommentBody(c) })),
+        head_sha: reviewedHeadSha,
       });
       if (r.isError) {
         const hint = /not found/i.test(r.content) && !embedded

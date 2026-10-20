@@ -118,6 +118,12 @@ test("post_review is only registered with allowPost and a token, and posts a COM
     assert.equal(r.isError, false);
     assert.match(r.content, /1 inline comment\(s\), 0 moved/);
     assert.equal(gh.requests.find((x) => x.method === "POST")!.body.event, "COMMENT");
+
+    const stale = await b.callTool("post_review", { pr: "acme/widgets#7", body: "x", head_sha: "0".repeat(40) });
+    assert.equal(stale.isError, true);
+    assert.match(stale.content, /new commits since it was reviewed/);
+    const badSha = await b.callTool("post_review", { pr: "acme/widgets#7", body: "x", head_sha: "not-a-sha" });
+    assert.equal(badSha.isError, true);
   } finally {
     await a.close();
     await b.close();

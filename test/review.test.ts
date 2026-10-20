@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agentEnv, buildReviewOptions, formatReviewMarkdown, REVIEW_TOOLS, runReview, type Review } from "../src/review.ts";
+import { agentEnv, buildReviewOptions, parseBudget, formatReviewMarkdown, REVIEW_TOOLS, runReview, type Review } from "../src/review.ts";
 
 const ref = { owner: "acme", repo: "widgets", number: 7 };
 const review: Review = {
@@ -95,4 +95,11 @@ test("agentEnv drops inherited Claude Code session variables but keeps the rest"
   assert.equal(env.CLAUDECODE, undefined);
   assert.equal(env.CLAUDE_CHROME_PERMISSION_MODE, undefined);
   assert.match(env.CLAUDE_AGENT_SDK_CLIENT_APP!, /^codebase-qa-assistant/);
+});
+
+test("parseBudget defaults when unset or blank and rejects junk", () => {
+  assert.equal(parseBudget(undefined), 1);
+  assert.equal(parseBudget("  "), 1);
+  assert.equal(parseBudget("0.5"), 0.5);
+  for (const bad of ["abc", "0", "-1", "Infinity", "NaN"]) assert.throws(() => parseBudget(bad), /greater than 0/);
 });

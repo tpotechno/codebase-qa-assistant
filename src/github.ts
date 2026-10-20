@@ -43,7 +43,11 @@ export function parsePatch(patch: string | undefined): ParsedPatch {
 
   const out: string[] = [];
   let newLine = 0;
-  for (const raw of patch.split("\n")) {
+  for (const line of patch.split("\n")) {
+    const raw = line.replace(/\r$/, "");
+    // A real context line is " " (a space), never empty. Empty strings only come from a
+    // trailing newline or CRLF artifacts and must not create phantom commentable lines.
+    if (raw === "") continue;
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
     if (hunk) {
       newLine = Number(hunk[1]);
@@ -60,11 +64,12 @@ export function parsePatch(patch: string | undefined): ParsedPatch {
       out.push(`      - ${body}`);
     } else if (tag === "\\") {
       out.push(`        ${raw}`); // "\ No newline at end of file"
-    } else {
+    } else if (tag === " ") {
       commentableLines.add(newLine);
       out.push(`${String(newLine).padStart(5)}   ${body}`);
       newLine++;
     }
+    // Anything else is not valid unified-diff content; skip it rather than miscount lines.
   }
   return { commentableLines, annotated: out.join("\n") };
 }
@@ -117,6 +122,8 @@ export interface GitHubClientOptions {
   token?: string;
   baseUrl?: string;
   fetch?: FetchLike;
+  /** How long a fetched PR is reused, so paging through a diff doesn't refetch it. Default 60s. */
+  cacheTtlMs?: number;
 }
 
 const MAX_FILE_PAGES = 30; // GitHub caps the files endpoint at 3,000 files (30 x 100)
@@ -125,11 +132,14 @@ export class GitHubClient {
   private readonly token?: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: FetchLike;
+  private readonly cacheTtlMs: number;
+  private readonly cache = new Map<string, { at: number; pr: Promise<PrSummary> }>();
 
   constructor(opts: GitHubClientOptions = {}) {
     this.token = opts.token || undefined;
     this.baseUrl = (opts.baseUrl ?? "https://api.github.com").replace(/\/$/, "");
     this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init));
+    this.cacheTtlMs = opts.cacheTtlMs ?? 60_000;
   }
 
   get hasToken(): boolean {
@@ -164,7 +174,26 @@ export class GitHubClient {
     return (await res.json()) as T;
   }
 
-  async getPr(ref: PrRef): Promise<PrSummary> {
+  /**
+   * Fetch a PR with its changed files. Results are cached briefly (keyed by PR) so a review
+   * that pages through the diff costs one fetch instead of one per page, which matters under
+   * GitHub's 60-requests-per-hour unauthenticated limit, and so every page comes from the same
+   * snapshot. Concurrent calls share one in-flight request. Pass fresh to bypass the cache.
+   */
+  async getPr(ref: PrRef, opts: { fresh?: boolean } = {}): Promise<PrSummary> {
+    const key = formatPrRef(ref).toLowerCase();
+    const hit = this.cache.get(key);
+    if (!opts.fresh && hit && Date.now() - hit.at < this.cacheTtlMs) return hit.pr;
+
+    const pr = this.fetchPr(ref);
+    this.cache.set(key, { at: Date.now(), pr });
+    pr.catch(() => {
+      if (this.cache.get(key)?.pr === pr) this.cache.delete(key);
+    });
+    return pr;
+  }
+
+  private async fetchPr(ref: PrRef): Promise<PrSummary> {
     const base = `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`;
     const pr = await this.request<any>(base);
     const files: PrFile[] = [];
@@ -196,8 +225,20 @@ export class GitHubClient {
    * make GitHub reject the whole review (HTTP 422), so they are validated first and any
    * that don't fit are folded into the review body rather than lost.
    */
-  async postReview(ref: PrRef, body: string, comments: ReviewComment[]): Promise<PostReviewResult> {
-    const pr = await this.getPr(ref);
+  async postReview(
+    ref: PrRef,
+    body: string,
+    comments: ReviewComment[],
+    opts: { expectedHeadSha?: string } = {},
+  ): Promise<PostReviewResult> {
+    // Always fresh: line validation and commit_id must match the PR as it is right now.
+    const pr = await this.getPr(ref, { fresh: true });
+    if (opts.expectedHeadSha && opts.expectedHeadSha !== pr.headSha) {
+      throw new Error(
+        `The PR has new commits since it was reviewed (reviewed ${opts.expectedHeadSha.slice(0, 7)}, ` +
+          `now ${pr.headSha.slice(0, 7)}). Re-run the review so comments land on the right lines.`,
+      );
+    }
     const lineSets = new Map(pr.files.map((f) => [f.filename, parsePatch(f.patch).commentableLines]));
 
     const inline: Array<ReviewComment & { side: "RIGHT" }> = [];
@@ -250,6 +291,8 @@ export function formatPrSummary(pr: PrSummary): string {
 }
 
 const DIFF_PAGE_CHARS = 24_000;
+const PART_CHARS = DIFF_PAGE_CHARS - 500; // leave room for the section header
+const MAX_LINE_CHARS = 2_000; // e.g. a minified line; keeps any single line from exceeding a page
 
 /** Lockfiles, minified bundles, and similar: rarely worth review tokens. */
 const GENERATED = [
@@ -262,6 +305,7 @@ export const isGeneratedFile = (path: string) => GENERATED.some((re) => re.test(
 /**
  * Annotated diffs, paged by size so a large PR never floods the context window.
  * Pass `path` for one file; otherwise files are packed into pages of ~24k characters.
+ * Files larger than a page are split into parts at line boundaries rather than truncated.
  */
 export function formatPrDiff(pr: PrSummary, opts: { path?: string; page?: number } = {}): string {
   let files = pr.files;
@@ -270,13 +314,34 @@ export function formatPrDiff(pr: PrSummary, opts: { path?: string; page?: number
     if (!files.length) return `Error: "${opts.path}" is not one of the files changed in ${formatPrRef(pr.ref)}.`;
   }
 
-  const sections = files.map((f) => {
-    const head = `=== ${f.filename} (${f.status}, +${f.additions} -${f.deletions}) ===`;
+  // Each file becomes one or more sections. A file too big for one page is split at line
+  // boundaries into numbered parts, so every line stays reachable by paging.
+  const sections: string[] = [];
+  for (const f of files) {
+    const label = `${f.filename} (${f.status}, +${f.additions} -${f.deletions})`;
     if (!opts.path && isGeneratedFile(f.filename)) {
-      return `${head}\n(generated file; diff omitted. Request it with path="${f.filename}" if it matters.)`;
+      sections.push(`=== ${label} ===\n(generated file; diff omitted. Request it with path="${f.filename}" if it matters.)`);
+      continue;
     }
-    return `${head}\n${parsePatch(f.patch).annotated}`;
-  });
+    const lines = parsePatch(f.patch).annotated.split("\n").map((l) =>
+      l.length > MAX_LINE_CHARS ? `${l.slice(0, MAX_LINE_CHARS)} … [line shortened]` : l,
+    );
+    const parts: string[][] = [[]];
+    let partSize = 0;
+    for (const l of lines) {
+      if (partSize > 0 && partSize + l.length + 1 > PART_CHARS) {
+        parts.push([]);
+        partSize = 0;
+      }
+      parts[parts.length - 1].push(l);
+      partSize += l.length + 1;
+    }
+    parts.forEach((p, i) => {
+      const suffix = parts.length > 1 ? ` [part ${i + 1} of ${parts.length}]` : "";
+      sections.push(`=== ${label}${suffix} ===\n${p.join("\n")}`);
+    });
+  }
+
   const pages: string[][] = [[]];
   let size = 0;
   for (const s of sections) {
@@ -284,8 +349,8 @@ export function formatPrDiff(pr: PrSummary, opts: { path?: string; page?: number
       pages.push([]);
       size = 0;
     }
-    pages[pages.length - 1].push(s.length > DIFF_PAGE_CHARS ? `${s.slice(0, DIFF_PAGE_CHARS)}\n… [file diff truncated]` : s);
-    size += Math.min(s.length, DIFF_PAGE_CHARS);
+    pages[pages.length - 1].push(s);
+    size += s.length;
   }
 
   const page = Math.min(Math.max(opts.page ?? 1, 1), pages.length);

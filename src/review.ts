@@ -114,6 +114,16 @@ export function agentEnv(source: NodeJS.ProcessEnv = process.env): Record<string
   return env;
 }
 
+/** Parse REVIEW_MAX_BUDGET_USD: unset or blank means the $1 default; anything else must be > 0. */
+export function parseBudget(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return 1;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`REVIEW_MAX_BUDGET_USD must be a number greater than 0 (got "${raw}").`);
+  }
+  return n;
+}
+
 export function buildReviewOptions(opts: ReviewOptions): Options {
   return {
     model: opts.model ?? process.env.CLAUDE_MODEL ?? "claude-sonnet-5-5",
