@@ -134,7 +134,9 @@ The tests need no API key or network. They cover the tools directly, document ch
 └──────────────────────────────────────────────┘
 ```
 
-Full design write-up: [docs/mcp_server_design.md](docs/mcp_server_design.md) ([PDF](docs/mcp_server_design.pdf)) (regenerate with `python scripts/build_design_doc.py docs/mcp_server_design.pdf`, requires `pip install reportlab`).
+Design docs:
+- **Phase 2, MCP server:** [docs/mcp_server_design.md](docs/mcp_server_design.md) ([PDF](docs/mcp_server_design.pdf))
+- **Phase 3, PR review:** [docs/pr_review_design.md](docs/pr_review_design.md) ([PDF](docs/pr_review_design.pdf)). The PDF is generated from the Markdown: `python scripts/md_to_pdf.py docs/pr_review_design.md docs/pr_review_design.pdf` (requires `pip install reportlab`).
 
 **Design notes**
 
