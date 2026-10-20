@@ -7,9 +7,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { readFile, searchCode } from "./tools.ts";
 import { searchDocsText } from "./docs.ts";
+import { GitHubClient, formatPrDiff, formatPrSummary, parsePrRef } from "./github.ts";
 
 export const SERVER_NAME = "codebase-qa";
-export const SERVER_VERSION = "0.2.0";
+export const SERVER_VERSION = "0.3.0";
 
 const text = (t: string) => ({
   content: [{ type: "text" as const, text: t }],
@@ -18,9 +19,17 @@ const text = (t: string) => ({
 
 const readOnly = { readOnlyHint: true, openWorldHint: false } as const;
 
-/** Build an MCP server whose tools are confined to one repository root. */
-export function createMcpServer(root: string): McpServer {
+export interface McpServerOptions {
+  /** GitHub client for the PR tools. Defaults to an unauthenticated client (public repos). */
+  github?: GitHubClient;
+  /** Register post_review. Requires a GitHub token; off by default. */
+  allowPost?: boolean;
+}
+
+/** Build an MCP server whose repo tools are confined to one repository root. */
+export function createMcpServer(root: string, opts: McpServerOptions = {}): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  const github = opts.github ?? new GitHubClient();
 
   server.registerTool(
     "search_code",
@@ -74,6 +83,86 @@ export function createMcpServer(root: string): McpServer {
     async ({ query, k }) => text(await searchDocsText(root, query, k)),
   );
 
+  // ---------- Pull-request tools (GitHub) ----------
+
+  const prInput = {
+    pr: z.string().min(1).describe("Pull request as owner/repo#123 or a github.com PR URL."),
+  };
+  const githubRead = { readOnlyHint: true, openWorldHint: true } as const;
+  const guard = async (fn: () => Promise<string>) => {
+    try {
+      return text(await fn());
+    } catch (e) {
+      return text(`Error: ${(e as Error).message}`);
+    }
+  };
+
+  server.registerTool(
+    "get_pr",
+    {
+      title: "Get pull request",
+      description:
+        "Fetch a GitHub pull request's title, description, author, branches, head commit, and the list " +
+        "of changed files with line counts. Call this first when reviewing a PR.",
+      inputSchema: prInput,
+      annotations: githubRead,
+    },
+    async ({ pr }) => guard(async () => formatPrSummary(await github.getPr(parsePrRef(pr)))),
+  );
+
+  server.registerTool(
+    "get_pr_diff",
+    {
+      title: "Get pull request diff",
+      description:
+        "Fetch a pull request's diff with new-file line numbers in the gutter. Only numbered lines can " +
+        "take inline review comments. Large diffs are paged (~24k characters per page); pass page to " +
+        "continue, or path to fetch a single file.",
+      inputSchema: {
+        ...prInput,
+        path: z.string().optional().describe("Only this changed file."),
+        page: z.number().int().min(1).optional().describe("Page number for large diffs (default 1)."),
+      },
+      annotations: githubRead,
+    },
+    async ({ pr, path, page }) =>
+      guard(async () => formatPrDiff(await github.getPr(parsePrRef(pr)), { path, page })),
+  );
+
+  if (opts.allowPost && github.hasToken) {
+    server.registerTool(
+      "post_review",
+      {
+        title: "Post pull request review",
+        description:
+          "Publish a review on a GitHub pull request as a single COMMENT (never approve or request " +
+          "changes). Inline comments must target numbered lines from get_pr_diff; any that don't are " +
+          "moved into the review body instead of failing the review.",
+        inputSchema: {
+          ...prInput,
+          body: z.string().min(1).describe("Overall review summary (Markdown)."),
+          comments: z
+            .array(
+              z.object({
+                path: z.string().min(1),
+                line: z.number().int().min(1),
+                body: z.string().min(1),
+              }),
+            )
+            .max(50)
+            .default([])
+            .describe("Inline comments on new-file lines."),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      },
+      async ({ pr, body, comments }) =>
+        guard(async () => {
+          const r = await github.postReview(parsePrRef(pr), body, comments);
+          return `Review posted: ${r.url} (${r.inlineCount} inline comment(s), ${r.foldedCount} moved to the body).`;
+        }),
+    );
+  }
+
   return server;
 }
 
@@ -88,7 +177,7 @@ function bearerAuth(token: string | undefined) {
   };
 }
 
-export interface HttpServerOptions {
+export interface HttpServerOptions extends McpServerOptions {
   root: string;
   port?: number;      // 0 = pick a free port (used by tests)
   host?: string;      // default 127.0.0.1 (local only)
@@ -109,7 +198,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<{ server
   });
 
   app.post("/mcp", bearerAuth(opts.token), async (req, res) => {
-    const server = createMcpServer(opts.root);
+    const server = createMcpServer(opts.root, { github: opts.github, allowPost: opts.allowPost });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { startHttpServer } from "../src/mcp-server.ts";
 import { mcpToolProvider, type ToolProvider } from "../src/tool-provider.ts";
 import { runAgent } from "../src/agent.ts";
+import { GitHubClient } from "../src/github.ts";
+import { fakeGitHub } from "./fixtures/fake-github.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TOKEN = "test-token-123";
@@ -15,7 +17,7 @@ let url: string;
 let tools: ToolProvider;
 
 before(async () => {
-  ({ server, url } = await startHttpServer({ root, port: 0, token: TOKEN }));
+  ({ server, url } = await startHttpServer({ root, port: 0, token: TOKEN, github: new GitHubClient({ fetch: fakeGitHub().fetch }) }));
   tools = await mcpToolProvider(url, TOKEN);
 });
 
@@ -24,9 +26,9 @@ after(async () => {
   await new Promise((r) => server.close(r));
 });
 
-test("lists all three tools with JSON schemas", async () => {
+test("lists the repo and PR tools with JSON schemas (post_review off by default)", async () => {
   const list = await tools.listTools();
-  assert.deepEqual(list.map((t) => t.name).sort(), ["read_file", "search_code", "search_docs"]);
+  assert.deepEqual(list.map((t) => t.name).sort(), ["get_pr", "get_pr_diff", "read_file", "search_code", "search_docs"]);
   const read = list.find((t) => t.name === "read_file")!;
   assert.equal(read.input_schema.type, "object");
   assert.deepEqual(read.input_schema.required, ["path"]);
@@ -83,4 +85,43 @@ test("agent loop runs end-to-end against the MCP server", async () => {
   const toolResult = requests[1].messages.at(-1).content[0];
   assert.equal(toolResult.is_error, false);
   assert.match(toolResult.content, /README\.md/);
+});
+
+test("get_pr and get_pr_diff work over HTTP", async () => {
+  const pr = await tools.callTool("get_pr", { pr: "acme/widgets#7" });
+  assert.equal(pr.isError, false);
+  assert.match(pr.content, /Read port from environment/);
+
+  const diff = await tools.callTool("get_pr_diff", { pr: "https://github.com/acme/widgets/pull/7" });
+  assert.match(diff.content, /Page 1 of 1/);
+  assert.match(diff.content, /2 \+ const port = Number/);
+
+  const missing = await tools.callTool("get_pr", { pr: "acme/widgets#99" });
+  assert.equal(missing.isError, true);
+  assert.match(missing.content, /GitHub 404/);
+});
+
+test("post_review is only registered with allowPost and a token, and posts a COMMENT", async () => {
+  const gh = fakeGitHub();
+  const noToken = await startHttpServer({ root, port: 0, allowPost: true, github: new GitHubClient({ fetch: gh.fetch }) });
+  const withToken = await startHttpServer({ root, port: 0, allowPost: true, github: new GitHubClient({ token: "t", fetch: gh.fetch }) });
+  const a = await mcpToolProvider(noToken.url);
+  const b = await mcpToolProvider(withToken.url);
+  try {
+    assert.ok(!(await a.listTools()).some((t) => t.name === "post_review"));
+    assert.ok((await b.listTools()).some((t) => t.name === "post_review"));
+    const r = await b.callTool("post_review", {
+      pr: "acme/widgets#7",
+      body: "Looks fine.",
+      comments: [{ path: "src/server.ts", line: 2, body: "Default the port." }],
+    });
+    assert.equal(r.isError, false);
+    assert.match(r.content, /1 inline comment\(s\), 0 moved/);
+    assert.equal(gh.requests.find((x) => x.method === "POST")!.body.event, "COMMENT");
+  } finally {
+    await a.close();
+    await b.close();
+    noToken.server.close();
+    withToken.server.close();
+  }
 });
