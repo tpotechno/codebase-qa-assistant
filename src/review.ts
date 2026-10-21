@@ -88,6 +88,8 @@ export interface ReviewOptions {
   maxBudgetUsd?: number;
   /** Progress callback for tool calls (name without the mcp__ prefix). */
   onToolCall?: (name: string, input: unknown) => void;
+  /** Abort the review (e.g. the browser disconnected). */
+  abortController?: AbortController;
   /** Injectable for tests. */
   queryFn?: (params: { prompt: string; options?: Options }) => AsyncIterable<SDKMessage>;
 }
@@ -110,7 +112,7 @@ export function agentEnv(source: NodeJS.ProcessEnv = process.env): Record<string
     if (/^(CLAUDE_CODE_|CLAUDE_CHROME|CLAUDECODE$|CCR_)/.test(k)) continue;
     env[k] = v;
   }
-  env.CLAUDE_AGENT_SDK_CLIENT_APP = "codebase-qa-assistant/0.3.0";
+  env.CLAUDE_AGENT_SDK_CLIENT_APP = "codebase-qa-assistant/0.4.0";
   return env;
 }
 
@@ -145,6 +147,7 @@ export function buildReviewOptions(opts: ReviewOptions): Options {
     outputFormat: { type: "json_schema", schema: REVIEW_SCHEMA as unknown as Record<string, unknown> },
     maxTurns: opts.maxTurns ?? 30,
     maxBudgetUsd: opts.maxBudgetUsd ?? 1,
+    ...(opts.abortController ? { abortController: opts.abortController } : {}),
   };
 }
 

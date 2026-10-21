@@ -7,7 +7,7 @@ import { readFile, searchCode, safeResolve } from "../src/tools.ts";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("search_code finds a known symbol with file:line and context", async () => {
-  const out = await searchCode({ query: "stop_reason", k: 2 }, root);
+  const out = await searchCode({ query: "stop_reason", k: 2, path_glob: "src/" }, root);
   assert.match(out, /src\/agent\.ts:\d+/);
   assert.match(out, /match\(es\)/);
 });

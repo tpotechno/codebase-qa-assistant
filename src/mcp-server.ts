@@ -10,7 +10,7 @@ import { searchDocsText } from "./docs.ts";
 import { GitHubClient, formatPrDiff, formatPrSummary, parsePrRef } from "./github.ts";
 
 export const SERVER_NAME = "codebase-qa";
-export const SERVER_VERSION = "0.3.0";
+export const SERVER_VERSION = "0.4.0";
 
 const text = (t: string) => ({
   content: [{ type: "text" as const, text: t }],

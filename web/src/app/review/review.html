@@ -1,0 +1,126 @@
+<form class="composer" (ngSubmit)="submit()">
+  <label for="pr">Pull request to review</label>
+  <div class="pr-row">
+    <input
+      id="pr"
+      name="pr"
+      autocomplete="off"
+      spellcheck="false"
+      [ngModel]="draft()"
+      (ngModelChange)="draft.set($event)"
+      [disabled]="running()"
+      placeholder="owner/repo#123 or a GitHub pull request link"
+    />
+    @if (running()) {
+      <button type="button" class="secondary" (click)="stop()">Stop</button>
+    } @else {
+      <button type="submit" [disabled]="!draft().trim()">Review</button>
+    }
+  </div>
+  <p class="hint">
+    Read-only until you choose to post. Each review stops at ${{ config()?.maxBudgetUsd ?? 1 }} of API usage.
+  </p>
+</form>
+
+@if (submitted()) {
+  <div class="workspace">
+    <article class="answer" aria-live="polite">
+      @if (started(); as pr) {
+        <h2><a [href]="pr.url" target="_blank" rel="noopener">{{ pr.title }}</a></h2>
+        <p class="pr-meta">
+          <code>{{ pr.pr }}</code>, {{ pr.files }} changed {{ pr.files === 1 ? 'file' : 'files' }}, reviewing commit
+          <code>{{ pr.headSha.slice(0, 7) }}</code>
+        </p>
+      }
+
+      @if (review(); as r) {
+        <div class="verdict" [class]="r.verdict">
+          <span class="mark" aria-hidden="true"></span>
+          <strong>{{ verdictText[r.verdict] }}</strong>
+          @if (counts()) {
+            <span class="counts">{{ counts() }}</span>
+          }
+        </div>
+        <div class="prose" [innerHTML]="r.summary | markdown"></div>
+
+        @if (files().length) {
+          <section class="comments" aria-label="Comments">
+            @for (file of files(); track file.path) {
+              <div class="file">
+                <h3><code>{{ file.path }}</code></h3>
+                <ol>
+                  @for (c of file.comments; track $index) {
+                    <li [class]="c.severity">
+                      <span class="gutter" [attr.aria-label]="'Line ' + c.line">{{ c.line }}</span>
+                      <div class="comment">
+                        <span class="severity">{{ c.severity }}</span>
+                        <div class="prose" [innerHTML]="c.body | markdown"></div>
+                      </div>
+                    </li>
+                  }
+                </ol>
+              </div>
+            }
+          </section>
+        } @else {
+          <p class="clean">No line comments. Nothing in the diff needed changes.</p>
+        }
+
+        <section class="publish" aria-label="Post to GitHub">
+          @switch (postState()) {
+            @case ('idle') {
+              @if (config()?.canPost) {
+                <button type="button" (click)="postState.set('confirm')">Post to GitHub</button>
+                <span class="hint">Posts exactly this review, as a comment. It never approves or blocks the PR.</span>
+              } @else {
+                <p class="hint">To post reviews, add <code>GITHUB_TOKEN</code> to <code>.env</code> and restart the server.</p>
+              }
+            }
+            @case ('confirm') {
+              <p>
+                Post this review to <code>{{ started()?.pr }}</code> with
+                {{ r.comments.length }} {{ r.comments.length === 1 ? 'comment' : 'comments' }}?
+              </p>
+              <div class="row">
+                <button type="button" (click)="post()">Post review</button>
+                <button type="button" class="secondary" (click)="postState.set('idle')">Cancel</button>
+              </div>
+              @if (postError()) {
+                <p class="error" role="alert">{{ postError() }}</p>
+              }
+            }
+            @case ('posting') {
+              <p class="hint">Posting…</p>
+            }
+            @case ('posted') {
+              @if (postResult(); as p) {
+                <p class="posted" role="status">
+                  {{ postedText(p) }}
+                  <a [href]="p.url" target="_blank" rel="noopener">View on GitHub</a>
+                </p>
+              }
+            }
+          }
+        </section>
+      } @else if (running()) {
+        <p class="waiting">{{ started() ? 'Reading the diff and the code around it…' : 'Fetching the pull request…' }}</p>
+      }
+
+      @if (error()) {
+        <p class="error" role="alert">{{ error() }}</p>
+      }
+      @if (stats(); as s) {
+        <p class="stats">
+          {{ s.turns }} turns, {{ (s.durationMs / 1000).toFixed(0) }} seconds, ${{ s.costUsd.toFixed(2) }}
+        </p>
+      }
+    </article>
+
+    <aside class="steps" aria-label="Steps">
+      <details open>
+        <summary><h3>Steps</h3></summary>
+        <app-trace [steps]="steps()" [running]="running()" idleText="Steps appear here once the PR is loaded." />
+      </details>
+    </aside>
+  </div>
+}

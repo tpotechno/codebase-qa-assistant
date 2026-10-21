@@ -1,0 +1,29 @@
+<header class="bar">
+  <div class="identity">
+    <span class="product">Codebase Q&amp;A</span>
+    @if (config(); as c) {
+      <code class="repo" [title]="c.repoPath">{{ c.repoName }}</code>
+    }
+  </div>
+
+  <nav class="modes" aria-label="Mode">
+    <button type="button" [attr.aria-pressed]="mode() === 'ask'" (click)="mode.set('ask')">Ask a question</button>
+    <button type="button" [attr.aria-pressed]="mode() === 'review'" (click)="mode.set('review')">Review a pull request</button>
+  </nav>
+</header>
+
+<main>
+  @if (configError()) {
+    <p class="error" role="alert">{{ configError() }}</p>
+  }
+  <!-- Both views stay alive so switching modes doesn't lose an answer or a review. -->
+  <app-ask [config]="config()" [hidden]="mode() !== 'ask'" />
+  <app-review [config]="config()" [hidden]="mode() !== 'review'" />
+</main>
+
+<footer>
+  @if (config(); as c) {
+    <span>Model <code>{{ c.model }}</code></span>
+    <span>{{ c.canPost ? 'GitHub token set' : 'No GitHub token: public PRs only, no posting' }}</span>
+  }
+</footer>

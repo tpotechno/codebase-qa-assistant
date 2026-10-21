@@ -72,3 +72,45 @@ test("stops at maxTurns", async () => {
   const result = await runAgent("loop forever", { client: client as any, maxTurns: 2 });
   assert.equal(result.stopReason, "max_turns");
 });
+
+test("streams text by turn and reports tool results with matching ids", async () => {
+  const turns: any[] = [
+    { stop_reason: "tool_use", usage, content: [{ type: "text", text: "Let me look." }, { type: "tool_use", id: "t9", name: "read_file", input: { path: "src/index.ts", start: 1, end: 1 } }] },
+    { stop_reason: "end_turn", usage, content: [{ type: "text", text: "Done." }] },
+  ];
+  const client = {
+    messages: {
+      create: async () => { throw new Error("should stream"); },
+      stream: () => {
+        const ls: Array<(d: string) => void> = [];
+        return {
+          on(_e: string, cb: (d: string) => void) { ls.push(cb); return this; },
+          async finalMessage() {
+            const m = turns.shift();
+            for (const b of m.content) if (b.type === "text") ls.forEach((l) => l(b.text));
+            return m;
+          },
+        };
+      },
+    },
+  };
+  const text: Array<[string, number]> = [];
+  const calls: string[] = [];
+  const results: string[] = [];
+  const r = await runAgent("q", {
+    client: client as any,
+    onText: (d, turn) => text.push([d, turn]),
+    onToolCall: (_n, _i, id) => calls.push(id),
+    onToolResult: (id, res) => results.push(`${id}:${res.isError}`),
+  });
+  assert.deepEqual(text, [["Let me look.", 1], ["Done.", 2]]);
+  assert.deepEqual(calls, ["t9"]);
+  assert.deepEqual(results, ["t9:false"]);
+  assert.equal(r.answer, "Done.");
+});
+
+test("an aborted signal stops the run", async () => {
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(runAgent("q", { client: { messages: { create: async () => ({}) } } as any, signal: ac.signal }), (e: Error) => e.name === "AbortError");
+});

@@ -7,6 +7,7 @@ on:
 
 jobs:
   test:
+    name: API, agents, and MCP server
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,3 +18,20 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  web:
+    name: Angular web UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx ng test --watch=false
+      - run: npx ng build
