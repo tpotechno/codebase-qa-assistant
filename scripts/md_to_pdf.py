@@ -141,7 +141,37 @@ def pr_review_diagram():
     return d
 
 
-DIAGRAMS = {"pr_review_design": pr_review_diagram}
+def web_ui_diagram():
+    W, H = 468, 282
+    d = Drawing(W, H)
+    _group(d, 2, 150, 176, 128, "Browser (Angular 21, web/)")
+    _box(d, 14, 222, 152, 34, "Ask view", "answer + Steps trace", fill=colors.white)
+    _box(d, 14, 180, 152, 34, "Review view", "verdict, comments, post", fill=colors.white)
+    _box(d, 14, 158, 152, 16, "Api: fetch + SseParser", None)
+
+    _group(d, 214, 140, 252, 138, "Local server (npm run web, 127.0.0.1)")
+    _box(d, 226, 214, 128, 42, "web-app.ts", "guards, timeouts, 2-run cap")
+    _box(d, 362, 214, 92, 42, "DraftStore", "drafts by id")
+    _arrow(d, 354, 235, 362, 235)
+    _box(d, 226, 152, 110, 40, "runAgent", "streaming loop", fill=colors.white)
+    _box(d, 344, 152, 110, 40, "runReview", "Agent SDK", fill=colors.white)
+    _arrow(d, 281, 214, 281, 192)
+    _arrow(d, 340, 214, 380, 192)
+
+    _arrow(d, 166, 244, 226, 244, "POST", 0, 5)
+    _arrow(d, 226, 228, 166, 228, "SSE", 0, -10)
+
+    _box(d, 214, 60, 160, 48, "MCP server (private)", "repo + PR tools, one-time token")
+    _arrow(d, 281, 152, 281, 108)
+    _arrow(d, 370, 152, 342, 108)
+    _box(d, 392, 70, 74, 34, "Claude API", None, fill=colors.white)
+    _arrow(d, 430, 152, 430, 104)
+    _box(d, 214, 10, 160, 28, "GitHub REST API", None, fill=colors.white)
+    _arrow(d, 294, 60, 294, 38)
+    return d
+
+
+DIAGRAMS = {"pr_review_design": pr_review_diagram, "web_ui_design": web_ui_diagram}
 
 
 # ---------- Markdown -> flowables ----------

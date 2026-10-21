@@ -167,7 +167,10 @@ The tests need no API key or network. The web API tests stream real Server-Sent 
 
 Design docs:
 - **Phase 2, MCP server:** [docs/mcp_server_design.md](docs/mcp_server_design.md) ([PDF](docs/mcp_server_design.pdf))
-- **Phase 3, PR review:** [docs/pr_review_design.md](docs/pr_review_design.md) ([PDF](docs/pr_review_design.pdf)). The PDF is generated from the Markdown: `python scripts/md_to_pdf.py docs/pr_review_design.md docs/pr_review_design.pdf` (requires `pip install reportlab`).
+- **Phase 3, PR review:** [docs/pr_review_design.md](docs/pr_review_design.md) ([PDF](docs/pr_review_design.pdf))
+- **Phase 4, web UI:** [docs/web_ui_design.md](docs/web_ui_design.md) ([PDF](docs/web_ui_design.pdf))
+
+The Phase 3 and 4 PDFs are generated from their Markdown, e.g. `python scripts/md_to_pdf.py docs/web_ui_design.md docs/web_ui_design.pdf` (requires `pip install reportlab`).
 
 **Design notes**
 
