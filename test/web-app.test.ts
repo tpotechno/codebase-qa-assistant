@@ -120,6 +120,7 @@ test("GET /api/config describes the repo, model, and posting ability", async () 
   assert.equal(cfg.repoName, path.basename(root));
   assert.equal(cfg.model, "test-model");
   assert.equal(cfg.canPost, true);
+  assert.equal(cfg.demo, false);
 });
 
 test("POST /api/ask streams tool calls, results, text by turn, and a final answer", async () => {
@@ -308,4 +309,20 @@ test("cross-site requests are rejected: foreign Origin, non-JSON body, foreign H
     }).on("error", reject);
   });
   assert.equal(status, 403);
+});
+
+test("/healthz answers platform probes from any Host; every response carries hardening headers", async () => {
+  const probe = await new Promise<{ status: number; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
+    const u = new URL(`${base}/healthz`);
+    http.get({ host: u.hostname, port: u.port, path: u.pathname, headers: { Host: "10.0.0.5:3335" } }, (r) => {
+      r.resume();
+      resolve({ status: r.statusCode!, headers: r.headers });
+    }).on("error", reject);
+  });
+  assert.equal(probe.status, 200);
+  assert.equal(probe.headers["x-content-type-options"], "nosniff");
+
+  const cfg = await fetch(`${base}/api/config`);
+  assert.equal(cfg.headers.get("x-frame-options"), "DENY");
+  assert.equal(cfg.headers.get("referrer-policy"), "no-referrer");
 });

@@ -79,6 +79,12 @@ export class Review {
   };
 
   protected readonly postedText = postedText;
+  protected readonly samplePr = 'acme/widgets#7';
+
+  protected useSample(): void {
+    this.draft.set(this.samplePr);
+    void this.submit();
+  }
 
   private controller: AbortController | null = null;
   private stepCount = 0;

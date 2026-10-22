@@ -4,6 +4,8 @@ export interface AppConfig {
   model: string;
   canPost: boolean;
   maxBudgetUsd: number;
+  /** Scripted demo: no model calls, a sample PR, nothing reaches GitHub. */
+  demo?: boolean;
 }
 
 export type StepStatus = 'running' | 'ok' | 'error';

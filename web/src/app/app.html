@@ -12,6 +12,16 @@
   </nav>
 </header>
 
+@if (config()?.demo) {
+  <aside class="demo-note" aria-label="About this demo">
+    <strong>Scripted demo.</strong>
+    The code search and file reading are real, over this project's own source, but the assistant's
+    decisions and words are scripted: every question gets the same sample answer, reviews use a sample
+    pull request, and nothing is sent to Claude or GitHub.
+    <a href="https://github.com/tpotechno/codebase-qa-assistant" target="_blank" rel="noopener">Source and design docs</a>
+  </aside>
+}
+
 <main>
   @if (configError()) {
     <p class="error" role="alert">{{ configError() }}</p>
@@ -24,6 +34,10 @@
 <footer>
   @if (config(); as c) {
     <span>Model <code>{{ c.model }}</code></span>
-    <span>{{ c.canPost ? 'GitHub token set' : 'No GitHub token: public PRs only, no posting' }}</span>
+    @if (c.demo) {
+      <span>Sample GitHub: posting is simulated</span>
+    } @else {
+      <span>{{ c.canPost ? 'GitHub token set' : 'No GitHub token: public PRs only, no posting' }}</span>
+    }
   }
 </footer>

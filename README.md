@@ -12,6 +12,7 @@ An agentic assistant built on the Claude API that answers questions about a code
 - **Phase 2 — complete.** Custom MCP server (Streamable HTTP) with code search, file reading, and documentation retrieval; the agent discovers its tools from the server at runtime.
 - **Phase 3 — complete.** Pull-request review: GitHub PR tools on the MCP server, and a `review` command orchestrated by the Claude Agent SDK that returns a structured, line-anchored review and can publish it to GitHub.
 - **Phase 4 — complete.** Angular web UI: streaming answers, a live trace of every tool call, and PR reviews you can read before posting the exact draft to GitHub.
+- **Phase 5 — in progress.** Hosting on Azure: the scripted demo deploys to Azure Container Apps from GitHub Actions on every merge, with infrastructure as code (Bicep) and keyless OIDC sign-in. Next: the real assistant behind sign-in.
 
 ### Tools
 
@@ -97,6 +98,8 @@ Uses the same `.env` as the command line. Two modes:
 
 **Try it without an API key:** `npm run web:demo` serves the UI on port 3335 with a scripted stand-in for Claude. The repo tools run for real against this repository; the review uses a sample PR (`acme/widgets#7`) from an in-memory GitHub, and nothing is sent anywhere.
 
+**Hosted demo:** the same scripted demo runs on Azure Container Apps, deployed by `.github/workflows/deploy.yml`. The URL is on the repository's `azure-demo` environment. See [docs/azure_deployment.md](docs/azure_deployment.md) for how it's built and the one-time Azure setup. To run the container locally: `docker build -t codebase-qa-demo . && docker run -p 3335:3335 codebase-qa-demo`.
+
 **Developing the UI:** run `npm run web` in one terminal and `npm run web:dev` in another, then open http://localhost:4200. `ng serve` reloads on save and proxies `/api` to the server.
 
 **Security.** The server holds your Anthropic and GitHub credentials, so it listens on `127.0.0.1` only and rejects requests whose `Host` isn't its own (DNS rebinding), requests from other sites' pages (`Origin` check), and anything that isn't JSON (cross-site forms). Only reviews the server itself produced can be posted (by id, once each, for an hour), so nothing that reaches the API can publish arbitrary text under your GitHub account. Raw HTML in model output is shown as text. Closing the tab or pressing **Stop** cancels the run, so it stops spending. At most two runs can be active at once.
@@ -169,6 +172,7 @@ Design docs:
 - **Phase 2, MCP server:** [docs/mcp_server_design.md](docs/mcp_server_design.md) ([PDF](docs/mcp_server_design.pdf))
 - **Phase 3, PR review:** [docs/pr_review_design.md](docs/pr_review_design.md) ([PDF](docs/pr_review_design.pdf))
 - **Phase 4, web UI:** [docs/web_ui_design.md](docs/web_ui_design.md) ([PDF](docs/web_ui_design.pdf))
+- **Phase 5, Azure deployment:** [docs/azure_deployment.md](docs/azure_deployment.md)
 
 The Phase 3 and 4 PDFs are generated from their Markdown, e.g. `python scripts/md_to_pdf.py docs/web_ui_design.md docs/web_ui_design.pdf` (requires `pip install reportlab`).
 
@@ -185,7 +189,7 @@ The Phase 3 and 4 PDFs are generated from their Markdown, e.g. `python scripts/m
 
 ## Roadmap
 
-- **Phase 5 — Production.** Evaluation suite (answer grounding, review quality), cost limits, tracing, and a public demo deployment of the MCP server.
+- **Phase 5 — Production.** Done: public demo on Azure Container Apps. Next: the real assistant on Azure behind Entra ID / GitHub sign-in, with keys in Azure secrets. Later: evaluation suite (answer grounding, review quality), tracing, Azure DevOps pull requests.
 
 ## License
 

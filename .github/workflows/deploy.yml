@@ -1,0 +1,90 @@
+name: Deploy demo to Azure
+
+# Builds the demo image, pushes it to Azure Container Registry, and rolls it out to
+# Azure Container Apps. Signs in with OpenID Connect: GitHub issues a short-lived token
+# that Azure trusts for this repo's azure-demo environment only, so no Azure password
+# or secret is stored in GitHub. One-time setup: docs/azure_deployment.md.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # lets the job request the OIDC token azure/login exchanges
+
+concurrency:
+  group: deploy-azure-demo
+  cancel-in-progress: false # never interrupt a rollout halfway
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: azure-demo
+      url: ${{ steps.deploy.outputs.url }}
+    # Until the Azure setup is done the repository variables are empty; skip instead of failing.
+    if: vars.AZURE_CLIENT_ID != ''
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      IMAGE_NAME: codebase-qa-demo
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in to Azure (OIDC, no stored secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure the container registry
+        id: registry
+        run: |
+          out=$(az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "registry-${GITHUB_RUN_ID}" \
+            --template-file infra/registry.bicep \
+            --query properties.outputs -o json)
+          echo "name=$(jq -r .registryName.value <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "server=$(jq -r .loginServer.value <<<"$out")" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push the image
+        id: image
+        env:
+          REGISTRY: ${{ steps.registry.outputs.server }}
+        run: |
+          # A new push role can take a minute or two to take effect, so retry, then fail for real.
+          retry() { for i in 1 2 3 4 5 6; do "$@" && return 0; echo "Not ready yet, retrying in 20s..."; sleep 20; done; "$@"; }
+          image="$REGISTRY/$IMAGE_NAME:${GITHUB_SHA}"
+          docker build --label "org.opencontainers.image.revision=${GITHUB_SHA}" -t "$image" .
+          retry az acr login --name "${{ steps.registry.outputs.name }}"
+          retry docker push "$image"
+          echo "ref=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy the Container App
+        id: deploy
+        run: |
+          url=$(az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "app-${GITHUB_RUN_ID}" \
+            --template-file infra/main.bicep \
+            --parameters registryName="${{ steps.registry.outputs.name }}" image="${{ steps.image.outputs.ref }}" \
+            --query properties.outputs.url.value -o tsv)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Deployed: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke test
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          # The app may be scaled to zero; the first request wakes it.
+          for i in $(seq 1 30); do
+            if curl -fsS "$URL/healthz" >/dev/null; then break; fi
+            sleep 5
+          done
+          curl -fsS "$URL/api/config" | tee /dev/stderr | jq -e '.demo == true' >/dev/null
+          curl -fsS "$URL/" | grep -q '<app-root'
+          echo "Smoke test passed." >> "$GITHUB_STEP_SUMMARY"

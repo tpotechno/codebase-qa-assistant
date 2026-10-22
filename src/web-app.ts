@@ -34,6 +34,8 @@ export interface WebAppDeps {
   mcp: { url: string; token?: string };
   /** Hosts (host:port) the server answers to. Requests with any other Host are rejected. */
   allowedHosts: string[];
+  /** Scripted demo: no model calls, a sample PR, nothing reaches GitHub. Shown in the UI. */
+  demo?: boolean;
   /** Static Angular build to serve, if present. */
   staticDir?: string;
   /** Injectable for tests. */
@@ -148,6 +150,14 @@ function guardRequests(allowedHosts: string[]) {
   };
 }
 
+/** Browser hardening for every response: no sniffing, no framing, no referrer leaks. */
+function securityHeaders(_req: Request, res: Response, next: NextFunction) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+}
+
 /** Parse a TCP port from the environment: unset or blank means the fallback. */
 export function parsePort(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === "") return fallback;
@@ -216,6 +226,11 @@ const badRequest = (res: Response, error: z.ZodError | Error) =>
 export function createWebApp(deps: WebAppDeps): Express {
   const app = express();
   app.disable("x-powered-by");
+  app.use(securityHeaders);
+  // Health checks come from the hosting platform by IP, so they are answered before the Host check.
+  app.get("/healthz", (_req, res) => {
+    res.json({ ok: true });
+  });
   app.use(guardRequests(deps.allowedHosts));
   app.use(express.json({ limit: "256kb" }));
 
@@ -239,6 +254,7 @@ export function createWebApp(deps: WebAppDeps): Express {
       model: deps.model,
       canPost: deps.canPost,
       maxBudgetUsd: deps.maxBudgetUsd,
+      demo: Boolean(deps.demo),
     });
   });
 
