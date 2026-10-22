@@ -18,7 +18,7 @@ The demo is the scripted mode (`npm run web:demo`). The code search and file rea
 
 ## How the deploy signs in (no stored secrets)
 
-The workflow uses **OpenID Connect**. On each run GitHub issues a short-lived token that says "this is tpotechno/codebase-qa-assistant, environment azure-demo". Azure has been told to trust exactly that, through a *federated credential* on an app registration. So:
+The workflow uses **OpenID Connect**. On each run GitHub issues a short-lived token whose subject says "this is tpotechno/codebase-qa-assistant, environment azure-demo", written with the owner's and repo's numeric IDs: `repo:tpotechno@44557011/codebase-qa-assistant@1426449283:environment:azure-demo`. Azure has been told to trust exactly that, through a *federated credential* on an app registration. The IDs never change, so a repo someone created later under the same name can't match it. So:
 
 - There is no Azure password, client secret or publish profile in GitHub. The repository variables below are identifiers, not secrets.
 - A fork, another branch's workflow, or another repository can't deploy: their tokens carry a different subject.
@@ -45,10 +45,16 @@ RG_ID=$(az group show --name $RG --query id -o tsv)
 # 3. An identity for GitHub Actions, trusted only for this repo's azure-demo environment.
 APP_ID=$(az ad app create --display-name codebase-qa-github-deploy --query appId -o tsv)
 SP_ID=$(az ad sp create --id $APP_ID --query id -o tsv)
+# GitHub's token subject includes the owner's and repo's numeric IDs:
+#   repo:<owner>@<owner id>/<repo>@<repo id>:environment:azure-demo
+OWNER_ID=$(curl -s https://api.github.com/repos/$REPO | jq -r .owner.id)
+REPO_ID=$(curl -s https://api.github.com/repos/$REPO | jq -r .id)
+SUBJECT="repo:${REPO%%/*}@$OWNER_ID/${REPO##*/}@$REPO_ID:environment:azure-demo"
+echo "Trusting: $SUBJECT"
 az ad app federated-credential create --id $APP_ID --parameters "{
   \"name\": \"github-azure-demo\",
   \"issuer\": \"https://token.actions.githubusercontent.com\",
-  \"subject\": \"repo:$REPO:environment:azure-demo\",
+  \"subject\": \"$SUBJECT\",
   \"audiences\": [\"api://AzureADTokenExchange\"]
 }"
 
@@ -92,7 +98,7 @@ Every change to the Azure resources goes through the Bicep files, so the infrast
 
 ## Troubleshooting
 
-- **`AADSTS700213` / "no matching federated identity record"** means the token's subject didn't match. Check the federated credential's subject is exactly `repo:tpotechno/codebase-qa-assistant:environment:azure-demo`, and that the job uses the `azure-demo` environment.
+- **`AADSTS700213` / "no matching federated identity record"** means the token's subject didn't match. The error shows the subject GitHub presented. Compare it with `az ad app federated-credential list --id <AZURE_CLIENT_ID> -o table`, making sure you check the app whose ID is in the `AZURE_CLIENT_ID` variable. Older guides use the form without IDs (`repo:owner/repo:environment:...`), which no longer matches. A new or corrected credential can take a few minutes to take effect, so wait before re-running.
 - **`AuthorizationFailed` on a role assignment** means step 4's second role is missing.
 - **The first deploy fails pulling the image.** A new role assignment can take a few minutes to reach the registry. Re-run the workflow.
 - **`MissingSubscriptionRegistration`** means step 1 hasn't finished. Wait a minute and re-run.
