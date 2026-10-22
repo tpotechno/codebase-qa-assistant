@@ -37,6 +37,7 @@ REPO=tpotechno/codebase-qa-assistant
 az provider register --namespace Microsoft.App --wait
 az provider register --namespace Microsoft.OperationalInsights --wait
 az provider register --namespace Microsoft.ContainerRegistry --wait
+az provider register --namespace Microsoft.ManagedIdentity --wait
 
 # 2. The resource group everything lives in.
 az group create --name $RG --location $LOCATION
@@ -101,7 +102,7 @@ Every change to the Azure resources goes through the Bicep files, so the infrast
 - **`AADSTS700213` / "no matching federated identity record"** means the token's subject didn't match. The error shows the subject GitHub presented. Compare it with `az ad app federated-credential list --id <AZURE_CLIENT_ID> -o table`, making sure you check the app whose ID is in the `AZURE_CLIENT_ID` variable. Older guides use the form without IDs (`repo:owner/repo:environment:...`), which no longer matches. A new or corrected credential can take a few minutes to take effect, so wait before re-running.
 - **`AuthorizationFailed` on a role assignment** means step 4's second role is missing.
 - **The first deploy fails pulling the image.** A new role assignment can take a few minutes to reach the registry. Re-run the workflow.
-- **`MissingSubscriptionRegistration`** means step 1 hasn't finished. Wait a minute and re-run.
+- **`MissingSubscriptionRegistration`** names a service the subscription hasn't enabled yet. Register the namespace in the message (`az provider register --namespace <name> --wait`) and re-run. If you did step 1, wait a minute: registration may still be in progress.
 - **Logs:** portal → the Container App → *Log stream*, or `az containerapp logs show -n codebase-qa-demo -g codebase-qa-demo-rg --follow`.
 
 ## Tearing it down
