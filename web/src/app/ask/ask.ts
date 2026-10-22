@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../api';
@@ -34,11 +34,16 @@ export class Ask {
   protected readonly error = signal('');
   protected readonly stats = signal<AskStats | null>(null);
 
-  protected readonly suggestions = [
-    'Give me a short tour of this codebase.',
-    'Where is configuration loaded, and what can be configured?',
-    'What are the riskiest parts of this code, and why?',
-  ];
+  /** The demo answers one scripted question, so it suggests only that one. */
+  protected readonly suggestions = computed(() =>
+    this.config()?.demo
+      ? ['How does the review agent stay read-only?']
+      : [
+          'Give me a short tour of this codebase.',
+          'Where is configuration loaded, and what can be configured?',
+          'What are the riskiest parts of this code, and why?',
+        ],
+  );
 
   private controller: AbortController | null = null;
   private turn = 0;

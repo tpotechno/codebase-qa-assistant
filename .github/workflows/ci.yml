@@ -35,3 +35,23 @@ jobs:
       - run: npm ci
       - run: npx ng test --watch=false
       - run: npx ng build
+
+  image:
+    name: Demo image and Azure infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure infrastructure (Bicep) compiles and lints clean
+        run: |
+          az bicep install
+          for f in infra/*.bicep; do az bicep lint --file "$f" && az bicep build --file "$f" --stdout >/dev/null; done
+      - run: docker build -t codebase-qa-demo:ci .
+      - name: Start the container and check it answers
+        run: |
+          docker run -d --name demo -p 3335:3335 -e PUBLIC_HOSTS=demo.example codebase-qa-demo:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3335/healthz && break; sleep 1; done
+          curl -fsS http://127.0.0.1:3335/api/config | jq -e '.demo == true and .repoName == "codebase-qa-assistant"'
+          curl -fsS -H "Host: demo.example" http://127.0.0.1:3335/ | grep -q '<app-root'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: other.example' http://127.0.0.1:3335/api/config)" = 403
+      - if: failure()
+        run: docker logs demo

@@ -1,0 +1,12 @@
+# Never ship secrets or local state into the image.
+.env
+.env.*
+!.env.example
+.git
+**/node_modules
+web/dist
+web/.angular
+**/__pycache__
+*.log
+.DS_Store
+Thumbs.db

@@ -7,18 +7,28 @@
  * The repo tools are real (they read this repository through the real MCP server); only the
  * model's decisions and words are scripted. The review uses a sample pull request
  * (acme/widgets#7) served by an in-memory GitHub, so nothing touches github.com.
+ *
+ * This is also what the public Azure deployment runs (see docs/azure_deployment.md):
+ *   DEMO_HOST     address to bind (default 127.0.0.1; the container uses 0.0.0.0)
+ *   DEMO_PORT     port (default 3335)
+ *   PUBLIC_HOSTS  comma-separated public host names to answer to, e.g. the Container App's FQDN
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startHttpServer } from "../src/mcp-server.ts";
 import { GitHubClient } from "../src/github.ts";
 import { mcpToolProvider } from "../src/tool-provider.ts";
-import { createWebApp } from "../src/web-app.ts";
+import { createWebApp, parsePort } from "../src/web-app.ts";
 import { fakeGitHub } from "../test/fixtures/fake-github.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
-const port = Number(process.env.DEMO_PORT ?? 3335);
+const port = parsePort(process.env.DEMO_PORT, 3335);
+const bindHost = process.env.DEMO_HOST?.trim() || "127.0.0.1";
+const publicHosts = (process.env.PUBLIC_HOSTS ?? "")
+  .split(",")
+  .map((h) => h.trim().toLowerCase())
+  .filter(Boolean);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const usage = { input_tokens: 2_400, output_tokens: 310 };
 
@@ -134,9 +144,17 @@ function scriptedReview() {
 }
 
 const gh = fakeGitHub();
-const github = new GitHubClient({ token: "demo", fetch: gh.fetch });
+// The fake records every request for tests; a long-running public demo keeps only recent ones.
+const fetchGitHub: typeof gh.fetch = (url, init) => {
+  if (gh.requests.length > 100) gh.requests.length = 0;
+  return gh.fetch(url, init);
+};
+const github = new GitHubClient({ token: "demo", fetch: fetchGitHub });
 const mcp = await startHttpServer({ root, port: 0, github });
-const allowedHosts = [`localhost:${port}`, `127.0.0.1:${port}`];
+const allowedHosts = [`localhost:${port}`, `127.0.0.1:${port}`, ...publicHosts];
+if (bindHost !== "127.0.0.1" && bindHost !== "localhost" && publicHosts.length === 0) {
+  console.error(`Listening on ${bindHost} but PUBLIC_HOSTS is empty, so only localhost requests will be answered.`);
+}
 
 createWebApp({
   root,
@@ -147,10 +165,14 @@ createWebApp({
   openTools: () => mcpToolProvider(mcp.url),
   mcp: { url: mcp.url },
   allowedHosts,
+  demo: true,
+  // Visitors share one instance; scripted runs are cheap, so allow a few at once.
+  maxConcurrentRuns: 8,
   staticDir: path.resolve(root, "web/dist/web/browser"),
   anthropic: scriptedAnthropic() as any,
   reviewQuery: scriptedReview(),
-}).listen(port, "127.0.0.1", () => {
+}).listen(port, bindHost, () => {
   console.error(`Demo UI (scripted, no API key needed): http://localhost:${port}`);
+  if (publicHosts.length) console.error(`Also answering to: ${publicHosts.join(", ")}`);
   console.error("Try the review with: acme/widgets#7");
 });

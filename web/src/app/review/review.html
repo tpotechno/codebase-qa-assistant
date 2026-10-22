@@ -9,7 +9,7 @@
       [ngModel]="draft()"
       (ngModelChange)="draft.set($event)"
       [disabled]="running()"
-      placeholder="owner/repo#123 or a GitHub pull request link"
+      [placeholder]="config()?.demo ? samplePr : 'owner/repo#123 or a GitHub pull request link'"
     />
     @if (running()) {
       <button type="button" class="secondary" (click)="stop()">Stop</button>
@@ -17,16 +17,27 @@
       <button type="submit" [disabled]="!draft().trim()">Review</button>
     }
   </div>
-  <p class="hint">
-    Read-only until you choose to post. Each review stops at ${{ config()?.maxBudgetUsd ?? 1 }} of API usage.
-  </p>
+  @if (config()?.demo) {
+    <p class="hint">
+      The demo reviews one sample pull request.
+      <button type="button" class="link" (click)="useSample()" [disabled]="running()">Review {{ samplePr }}</button>
+    </p>
+  } @else {
+    <p class="hint">
+      Read-only until you choose to post. Each review stops at ${{ config()?.maxBudgetUsd ?? 1 }} of API usage.
+    </p>
+  }
 </form>
 
 @if (submitted()) {
   <div class="workspace">
     <article class="answer" aria-live="polite">
       @if (started(); as pr) {
-        <h2><a [href]="pr.url" target="_blank" rel="noopener">{{ pr.title }}</a></h2>
+        @if (config()?.demo) {
+          <h2>{{ pr.title }}</h2>
+        } @else {
+          <h2><a [href]="pr.url" target="_blank" rel="noopener">{{ pr.title }}</a></h2>
+        }
         <p class="pr-meta">
           <code>{{ pr.pr }}</code>, {{ pr.files }} changed {{ pr.files === 1 ? 'file' : 'files' }}, reviewing commit
           <code>{{ pr.headSha.slice(0, 7) }}</code>
@@ -96,7 +107,9 @@
               @if (postResult(); as p) {
                 <p class="posted" role="status">
                   {{ postedText(p) }}
-                  <a [href]="p.url" target="_blank" rel="noopener">View on GitHub</a>
+                  @if (!config()?.demo) {
+                    <a [href]="p.url" target="_blank" rel="noopener">View on GitHub</a>
+                  }
                 </p>
               }
             }
@@ -111,7 +124,7 @@
       }
       @if (stats(); as s) {
         <p class="stats">
-          {{ s.turns }} turns, {{ (s.durationMs / 1000).toFixed(0) }} seconds, ${{ s.costUsd.toFixed(2) }}
+          {{ s.turns }} turns, {{ (s.durationMs / 1000).toFixed(0) }} seconds, ${{ s.costUsd.toFixed(2) }}{{ config()?.demo ? ' (sample figures)' : '' }}
         </p>
       }
     </article>

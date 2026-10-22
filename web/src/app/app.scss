@@ -64,6 +64,18 @@
   }
 }
 
+.demo-note {
+  padding: 0.7rem var(--gutter-x);
+  border-bottom: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  font-size: 0.9rem;
+
+  a {
+    margin-left: 0.35rem;
+    white-space: nowrap;
+  }
+}
+
 main {
   flex: 1;
   width: 100%;

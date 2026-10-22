@@ -22,9 +22,9 @@
 
 @if (!asked()) {
   <section class="start" aria-label="Example questions">
-    <p>Answers cite the files and lines they come from. Try one of these:</p>
+    <p>Answers cite the files and lines they come from. {{ suggestions().length === 1 ? 'Try this one:' : 'Try one of these:' }}</p>
     <ul>
-      @for (s of suggestions; track s) {
+      @for (s of suggestions(); track s) {
         <li><button type="button" class="link" (click)="useSuggestion(s)">{{ s }}</button></li>
       }
     </ul>
@@ -44,7 +44,7 @@
       @if (stats(); as s) {
         <p class="stats">
           {{ s.turns }} {{ s.turns === 1 ? 'turn' : 'turns' }}, {{ s.toolCalls }} tool
-          {{ s.toolCalls === 1 ? 'call' : 'calls' }}, {{ s.inputTokens + s.outputTokens | number }} tokens
+          {{ s.toolCalls === 1 ? 'call' : 'calls' }}, {{ s.inputTokens + s.outputTokens | number }} tokens{{ config()?.demo ? ' (sample figures)' : '' }}
         </p>
       }
     </article>
