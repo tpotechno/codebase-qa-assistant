@@ -94,7 +94,15 @@ footer {
   font-size: 0.8rem;
 }
 
+.who {
+  margin-left: auto;
+}
+
 @media (max-width: 40rem) {
+  .who {
+    margin-left: 0;
+  }
+
   .modes {
     width: 100%;
 

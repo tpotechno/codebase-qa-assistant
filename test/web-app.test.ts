@@ -4,7 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { DraftStore, createWebApp, parsePort } from "../src/web-app.ts";
+import { DraftStore, createWebApp, parseList, parsePort } from "../src/web-app.ts";
 import { startHttpServer } from "../src/mcp-server.ts";
 import { GitHubClient } from "../src/github.ts";
 import { mcpToolProvider } from "../src/tool-provider.ts";
@@ -325,4 +325,36 @@ test("/healthz answers platform probes from any Host; every response carries har
   const cfg = await fetch(`${base}/api/config`);
   assert.equal(cfg.headers.get("x-frame-options"), "DENY");
   assert.equal(cfg.headers.get("referrer-policy"), "no-referrer");
+});
+
+test("hosted mode admits only allowlisted GitHub users signed in by the platform", async () => {
+  const hosted = await startApp({ allowedUsers: ["tpotechno"] });
+  try {
+    const get = (headers: Record<string, string> = {}) => fetch(`${hosted.base}/api/config`, { headers });
+    assert.equal((await get()).status, 401, "no identity: not signed in");
+    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "someone", "X-MS-CLIENT-PRINCIPAL-IDP": "github" })).status, 403);
+    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "tpotechno", "X-MS-CLIENT-PRINCIPAL-IDP": "aad" })).status, 403, "right name, wrong provider");
+
+    const ok = await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "TPOtechno", "X-MS-CLIENT-PRINCIPAL-IDP": "github" });
+    assert.equal(ok.status, 200);
+    assert.equal((await ok.json()).user, "TPOtechno");
+
+    const principal = (auth_typ: string) => Buffer.from(JSON.stringify({ auth_typ, claims: [] })).toString("base64");
+    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "tpotechno", "X-MS-CLIENT-PRINCIPAL": principal("github") })).status, 200, "provider read from the encoded principal");
+    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "tpotechno", "X-MS-CLIENT-PRINCIPAL": principal("aad") })).status, 403);
+    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "tpotechno", "X-MS-CLIENT-PRINCIPAL": "not base64 json" })).status, 403);
+
+    const anon = await fetch(`${hosted.base}/api/ask`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "hi" }) });
+    assert.equal(anon.status, 401, "API calls are gated too");
+    assert.equal((await fetch(`${hosted.base}/healthz`)).status, 200, "probes need no sign-in");
+  } finally {
+    hosted.server.close();
+  }
+  const local = await (await fetch(`${base}/api/config`)).json();
+  assert.equal(local.user, null, "local use has no sign-in");
+});
+
+test("parseList trims and drops blanks", () => {
+  assert.deepEqual(parseList(" a, b ,,c "), ["a", "b", "c"]);
+  assert.deepEqual(parseList(undefined), []);
 });

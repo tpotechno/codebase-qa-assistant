@@ -24,7 +24,11 @@ export class App implements OnInit {
     try {
       this.config.set(await this.api.config());
     } catch {
-      this.configError.set("Can't reach the local server. Start it with npm run web, then reload this page.");
+      this.configError.set(
+        location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+          ? "Can't reach the local server. Start it with npm run web, then reload this page."
+          : "Can't reach the server. If your session ended, reload the page to sign in again.",
+      );
     }
   }
 }

@@ -12,7 +12,9 @@ An agentic assistant built on the Claude API that answers questions about a code
 - **Phase 2 — complete.** Custom MCP server (Streamable HTTP) with code search, file reading, and documentation retrieval; the agent discovers its tools from the server at runtime.
 - **Phase 3 — complete.** Pull-request review: GitHub PR tools on the MCP server, and a `review` command orchestrated by the Claude Agent SDK that returns a structured, line-anchored review and can publish it to GitHub.
 - **Phase 4 — complete.** Angular web UI: streaming answers, a live trace of every tool call, and PR reviews you can read before posting the exact draft to GitHub.
-- **Phase 5 — in progress.** Hosting on Azure: the scripted demo deploys to Azure Container Apps from GitHub Actions on every merge, with infrastructure as code (Bicep) and keyless OIDC sign-in. Next: the real assistant behind sign-in.
+- **Phase 5 — in progress.** Hosting on Azure. Every merge deploys from GitHub Actions to Azure Container Apps, with infrastructure as code (Bicep) and keyless OIDC sign-in:
+  - a public, scripted demo;
+  - the real assistant, private behind GitHub sign-in and an allowlist, with its keys in Key Vault.
 
 ### Tools
 
@@ -189,7 +191,9 @@ The Phase 3 and 4 PDFs are generated from their Markdown, e.g. `python scripts/m
 
 ## Roadmap
 
-- **Phase 5 — Production.** Done: public demo on Azure Container Apps. Next: the real assistant on Azure behind Entra ID / GitHub sign-in, with keys in Azure secrets. Later: evaluation suite (answer grounding, review quality), tracing, Azure DevOps pull requests.
+- **Phase 5 — Production.**
+  - Done: a public demo and a private real deployment on Azure Container Apps.
+  - Next: an evaluation suite (answer grounding, review quality), tracing, and Azure DevOps pull requests.
 
 ## License
 
