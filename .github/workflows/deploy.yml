@@ -31,10 +31,10 @@ jobs:
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       IMAGE_NAME: codebase-qa-demo
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Sign in to Azure (OIDC, no stored secret)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
