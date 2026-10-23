@@ -6,6 +6,8 @@ export interface AppConfig {
   maxBudgetUsd: number;
   /** Scripted demo: no model calls, a sample PR, nothing reaches GitHub. */
   demo?: boolean;
+  /** GitHub username when hosted behind sign-in; null when running locally. */
+  user?: string | null;
 }
 
 export type StepStatus = 'running' | 'ok' | 'error';

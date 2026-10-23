@@ -18,7 +18,8 @@ import type { ToolProvider } from "./tool-provider.ts";
  *   POST /api/review/post   publishes a draft this server produced, by id, at most once
  *
  * The server holds the Anthropic and GitHub credentials, so it only answers same-origin
- * requests from localhost (see guardRequests).
+ * requests addressed to its own host names (see guardRequests) and, when hosted, only
+ * signed-in, allowlisted users (see requireUser).
  */
 
 export interface WebAppDeps {
@@ -36,6 +37,13 @@ export interface WebAppDeps {
   allowedHosts: string[];
   /** Scripted demo: no model calls, a sample PR, nothing reaches GitHub. Shown in the UI. */
   demo?: boolean;
+  /**
+   * GitHub usernames allowed in, when hosted behind Azure Container Apps authentication
+   * (Easy Auth). The platform signs the user in and passes their identity in
+   * X-MS-CLIENT-PRINCIPAL-* headers, stripping any a client sends. Every request except
+   * /healthz must carry a GitHub identity from this list. Unset means local use: no sign-in.
+   */
+  allowedUsers?: string[];
   /** Static Angular build to serve, if present. */
   staticDir?: string;
   /** Injectable for tests. */
@@ -150,6 +158,46 @@ function guardRequests(allowedHosts: string[]) {
   };
 }
 
+/**
+ * Admit only allowlisted GitHub users signed in by the hosting platform. The identity
+ * headers are trustworthy only behind Container Apps authentication, which overwrites
+ * them; the server refuses to listen publicly without an allowlist (see web-server.ts).
+ */
+function requireUser(allowed: string[]) {
+  const ok = new Set(allowed.map((u) => u.toLowerCase()));
+  return (req: Request, res: Response, next: NextFunction) => {
+    const name = req.get("x-ms-client-principal-name");
+    if (!name) return res.status(401).json({ error: "Sign in to use this app." });
+    if (principalProvider(req) !== "github" || !ok.has(name.toLowerCase())) {
+      return res.status(403).json({ error: `${name} isn't allowed to use this app.` });
+    }
+    res.locals.user = name;
+    next();
+  };
+}
+
+/** The sign-in provider: the IDP header, or auth_typ inside the encoded principal. */
+function principalProvider(req: Request): string | undefined {
+  const idp = req.get("x-ms-client-principal-idp");
+  if (idp) return idp.toLowerCase();
+  const encoded = req.get("x-ms-client-principal");
+  if (!encoded) return undefined;
+  try {
+    const typ = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")).auth_typ;
+    return typeof typ === "string" ? typ.toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Split a comma-separated environment value, trimming and dropping blanks. */
+export function parseList(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /** Browser hardening for every response: no sniffing, no framing, no referrer leaks. */
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -232,6 +280,7 @@ export function createWebApp(deps: WebAppDeps): Express {
     res.json({ ok: true });
   });
   app.use(guardRequests(deps.allowedHosts));
+  if (deps.allowedUsers?.length) app.use(requireUser(deps.allowedUsers));
   app.use(express.json({ limit: "256kb" }));
 
   const drafts = deps.drafts ?? new DraftStore();
@@ -255,6 +304,7 @@ export function createWebApp(deps: WebAppDeps): Express {
       canPost: deps.canPost,
       maxBudgetUsd: deps.maxBudgetUsd,
       demo: Boolean(deps.demo),
+      user: (res.locals.user as string | undefined) ?? null,
     });
   });
 

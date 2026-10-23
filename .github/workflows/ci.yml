@@ -53,5 +53,10 @@ jobs:
           curl -fsS http://127.0.0.1:3335/api/config | jq -e '.demo == true and .repoName == "codebase-qa-assistant"'
           curl -fsS -H "Host: demo.example" http://127.0.0.1:3335/ | grep -q '<app-root'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: other.example' http://127.0.0.1:3335/api/config)" = 403
+      - name: The real server refuses to listen publicly without an allowlist
+        run: |
+          if docker run --rm -e WEB_HOST=0.0.0.0 -e ANTHROPIC_API_KEY=placeholder codebase-qa-demo:ci node_modules/.bin/tsx src/web-server.ts; then
+            echo "::error::web-server started on 0.0.0.0 without ALLOWED_GITHUB_USERS"; exit 1
+          fi
       - if: failure()
         run: docker logs demo

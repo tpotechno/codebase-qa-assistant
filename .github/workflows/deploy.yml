@@ -88,3 +88,53 @@ jobs:
           curl -fsS "$URL/api/config" | tee /dev/stderr | jq -e '.demo == true' >/dev/null
           curl -fsS "$URL/" | grep -q '<app-root'
           echo "Smoke test passed." >> "$GITHUB_STEP_SUMMARY"
+
+      # ---- The private app (real assistant behind GitHub sign-in) ----
+      # Stage 1 (always): Key Vault + identity, and the URLs needed to set up sign-in.
+      # Stage 2 (PRIVATE_APP_ENABLED=true, once the vault has its secrets): the app itself.
+      - name: Deploy the private app
+        id: private
+        env:
+          ENABLED: ${{ vars.PRIVATE_APP_ENABLED == 'true' }}
+          OAUTH_CLIENT_ID: ${{ vars.PRIVATE_OAUTH_CLIENT_ID }}
+          ALLOWED_USERS: ${{ vars.PRIVATE_ALLOWED_USERS || github.repository_owner }}
+        run: |
+          if [ "$ENABLED" = true ] && [ -z "$OAUTH_CLIENT_ID" ]; then
+            echo "::error::PRIVATE_APP_ENABLED is true but PRIVATE_OAUTH_CLIENT_ID is not set. See docs/azure_deployment.md."
+            exit 1
+          fi
+          out=$(az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "private-${GITHUB_RUN_ID}" \
+            --template-file infra/private.bicep \
+            --parameters registryName="${{ steps.registry.outputs.name }}" image="${{ steps.image.outputs.ref }}" \
+                         deployApp="$ENABLED" allowedGithubUsers="$ALLOWED_USERS" githubOAuthClientId="$OAUTH_CLIENT_ID" \
+            --query properties.outputs -o json)
+          url=$(jq -r .url.value <<<"$out")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Private app"
+            if [ "$ENABLED" = true ]; then
+              echo "Deployed: $url (GitHub sign-in; allowed: $ALLOWED_USERS)"
+            else
+              echo "Not deployed yet. Key Vault: \`$(jq -r .vaultName.value <<<"$out")\`"
+              echo ""
+              echo "- Homepage URL for the GitHub OAuth app: $url"
+              echo "- Authorization callback URL: $(jq -r .oauthCallbackUrl.value <<<"$out")"
+              echo ""
+              echo "Next steps: docs/azure_deployment.md, \"The private app\"."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the private app is up and locked
+        if: vars.PRIVATE_APP_ENABLED == 'true'
+        env:
+          URL: ${{ steps.private.outputs.url }}
+        run: |
+          for i in $(seq 1 30); do curl -fsS "$URL/healthz" >/dev/null && break; sleep 5; done
+          curl -fsS "$URL/healthz"
+          # Without signing in, the API must not answer: expect a redirect to sign-in or 401.
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/api/config")
+          echo "Unauthenticated /api/config -> $code"
+          case "$code" in 302|401) ;; *) echo "::error::The private app answered without sign-in ($code)"; exit 1 ;; esac
+          echo "Private app is up and requires sign-in." >> "$GITHUB_STEP_SUMMARY"

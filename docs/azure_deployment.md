@@ -1,4 +1,9 @@
-# Deploying the demo to Azure
+# Deploying to Azure
+
+Two apps run on **Azure Container Apps** from the same image:
+
+- **The public demo**: scripted, no keys, safe to share. Covered first.
+- **The private app**: the real assistant (Claude API, real GitHub PRs) behind GitHub sign-in, for its owner only. See [The private app](#the-private-app).
 
 The public demo runs on **Azure Container Apps**. Every merge to `main` builds a container image, pushes it to **Azure Container Registry**, and rolls it out, from the GitHub Actions workflow in `.github/workflows/deploy.yml`.
 
@@ -86,6 +91,7 @@ Until the variables exist, the deploy job is skipped rather than failing, so mer
 3. Builds the image (`Dockerfile`: the Angular UI is built in one stage, the server runs in the other) and pushes it tagged with the commit SHA.
 4. Deploys `infra/main.bicep` with that image. Container Apps starts a new revision and moves traffic once `/healthz` passes.
 5. Smoke-tests the live URL: health, `/api/config` reports demo mode, and the UI is served.
+6. Deploys `infra/private.bicep`. Until `PRIVATE_APP_ENABLED` is `true`, this creates only the Key Vault and the app's identity. After that, it also rolls out the private app and checks that it refuses unauthenticated requests.
 
 Every change to the Azure resources goes through the Bicep files, so the infrastructure is reviewed in pull requests like the code.
 
@@ -96,6 +102,7 @@ Every change to the Azure resources goes through the Bicep files, so the infrast
 - **The image contains no secrets.** `.dockerignore` excludes `.env`, git history and local `node_modules`. The container runs as the unprivileged `node` user.
 - **Visitors can't steer the tools.** The scripted model makes the same calls every time, and `read_file` refuses paths outside the repository in any case.
 - **One replica at most.** Drafts waiting to be "posted" live in memory, so a second replica could receive the post for a draft it never saw. The scripted demo needs nothing more.
+- **The private app** has its own protections; see [The private app](#the-private-app).
 
 ## Troubleshooting
 
@@ -105,9 +112,83 @@ Every change to the Azure resources goes through the Bicep files, so the infrast
 - **`MissingSubscriptionRegistration`** names a service the subscription hasn't enabled yet. Register the namespace in the message (`az provider register --namespace <name> --wait`) and re-run. If you did step 1, wait a minute: registration may still be in progress.
 - **Logs:** portal → the Container App → *Log stream*, or `az containerapp logs show -n codebase-qa-demo -g codebase-qa-demo-rg --follow`.
 
+## The private app
+
+The real assistant, hosted for you alone. It's the same image and the same Container Apps environment as the demo, but it runs `src/web-server.ts`: real Claude calls, real GitHub PRs, and posting reviews with your token.
+
+**How it's protected**
+
+- **Sign-in at the door.** Container Apps authentication sends every visitor to GitHub to sign in before any request reaches the app. Only `/healthz` is exempt.
+- **An allowlist in the app.** The platform passes the signed-in identity in `X-MS-CLIENT-PRINCIPAL-*` headers, and overwrites any a client sends. The server admits only GitHub users in `ALLOWED_GITHUB_USERS` (by default the repository owner); anyone else signed in gets a 403. If it's bound to a public address without an allowlist, the server refuses to start.
+- **Keys in Key Vault.** The Anthropic key, the GitHub token and the OAuth client secret are stored only in Key Vault. The Container App holds references, read with its own managed identity (`Key Vault Secrets User` on that vault only). They never pass through GitHub, the Bicep or the deploy logs.
+- **The same limits as locally:** the per-review dollar cap (`REVIEW_MAX_BUDGET_USD`, default $1), the 10-minute timeout, two runs at a time, and the read-only review agent.
+
+**Cost.** About $0 when idle: it scales to zero, and Key Vault charges fractions of a cent per thousand reads. What you pay for is Claude usage, capped per review.
+
+### Setup (about 10 minutes, after the demo is working)
+
+**1. Enable Key Vault** for the subscription, in Cloud Shell (Bash):
+
+```bash
+az provider register --namespace Microsoft.KeyVault --wait
+```
+
+**2. Let a deploy run** (merge to `main`, or **Actions → Deploy demo to Azure → Run workflow**). Its summary has a **Private app** section with the Key Vault name, the app's homepage URL and its authorization callback URL.
+
+**3. Create the GitHub OAuth app** that sign-in uses: on GitHub, **Settings → Developer settings → OAuth Apps → New OAuth App**.
+- Application name: `Codebase Q&A (private)`
+- Homepage URL and Authorization callback URL: the two URLs from the run summary
+- Register it. Copy the **Client ID**, then **Generate a new client secret** and copy it straight away, because GitHub shows it only once.
+
+**4. Put the three secrets in Key Vault.** First give yourself permission to write secrets in that vault, which is a one-time step. `read -s` keeps each value off the screen and out of shell history:
+
+```bash
+RG=codebase-qa-demo-rg
+VAULT=<Key Vault name from the run summary>
+az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --role "Key Vault Secrets Officer" --scope "$(az keyvault show --name $VAULT --query id -o tsv)"
+# The new role can take a minute; if the next command says Forbidden, wait and retry.
+
+read -rsp "Anthropic API key: " v; echo; az keyvault secret set --vault-name $VAULT --name anthropic-api-key --value "$v" -o none
+read -rsp "GitHub token: " v; echo; az keyvault secret set --vault-name $VAULT --name github-token --value "$v" -o none
+read -rsp "GitHub OAuth client secret: " v; echo; az keyvault secret set --vault-name $VAULT --name github-oauth-secret --value "$v" -o none
+unset v
+```
+
+The GitHub token is the fine-grained token you use locally: Pull requests read and write on the repos you want reviewed.
+
+**5. Turn it on.** Add these **repository variables** (Settings → Secrets and variables → Actions → Variables):
+
+| Variable | Value |
+|---|---|
+| `PRIVATE_OAUTH_CLIENT_ID` | The OAuth app's Client ID (not a secret) |
+| `PRIVATE_APP_ENABLED` | `true` |
+| `PRIVATE_ALLOWED_USERS` | Optional. Comma-separated GitHub usernames; defaults to the repository owner |
+
+**6. Deploy** (run the workflow again). Then open the app's URL, sign in with GitHub, and approve the OAuth app the first time. The footer shows who you're signed in as, with a sign-out link.
+
+### Changing a key
+
+Set the new value with `az keyvault secret set` as in step 4, then restart the app so it reads it:
+
+```bash
+az containerapp revision restart -n codebase-qa -g $RG \
+  --revision "$(az containerapp revision list -n codebase-qa -g $RG --query '[0].name' -o tsv)"
+```
+
+### Private app troubleshooting
+
+- **The deploy fails with a Key Vault or secret error** (for example "unable to fetch secret") when `PRIVATE_APP_ENABLED` is `true`. A secret from step 4 is missing or misnamed: the names must be exactly `anthropic-api-key`, `github-token` and `github-oauth-secret`.
+- **GitHub says "The redirect_uri is not associated with this application"** when the OAuth app's callback URL doesn't exactly match the one in the run summary.
+- **You sign in and get "… isn't allowed to use this app"** when your GitHub username isn't in `PRIVATE_ALLOWED_USERS` (or the owner default).
+- **Reviews or answers fail with an authentication error** when the Anthropic key or GitHub token in Key Vault is wrong. Fix it as in *Changing a key*.
+
 ## Tearing it down
 
 ```bash
 az group delete --name codebase-qa-demo-rg
 az ad app delete --id <AZURE_CLIENT_ID>
+az keyvault purge --name <Key Vault name>   # deleted vaults are kept 7 days unless purged
 ```
+
+Also delete the GitHub OAuth app under Developer settings.
