@@ -38,10 +38,11 @@ export interface WebAppDeps {
   /** Scripted demo: no model calls, a sample PR, nothing reaches GitHub. Shown in the UI. */
   demo?: boolean;
   /**
-   * GitHub usernames allowed in, when hosted behind Azure Container Apps authentication
-   * (Easy Auth). The platform signs the user in and passes their identity in
-   * X-MS-CLIENT-PRINCIPAL-* headers, stripping any a client sends. Every request except
-   * /healthz must carry a GitHub identity from this list. Unset means local use: no sign-in.
+   * GitHub usernames (logins) allowed in, when hosted behind Azure Container Apps
+   * authentication (Easy Auth). The platform signs the user in and passes their identity in
+   * X-MS-CLIENT-PRINCIPAL, overwriting any a client sends. Every request except /healthz
+   * must carry a GitHub login from this list; the display name is never trusted.
+   * Unset means local use: no sign-in.
    */
   allowedUsers?: string[];
   /** Static Angular build to serve, if present. */
@@ -166,28 +167,66 @@ function guardRequests(allowedHosts: string[]) {
 function requireUser(allowed: string[]) {
   const ok = new Set(allowed.map((u) => u.toLowerCase()));
   return (req: Request, res: Response, next: NextFunction) => {
-    const name = req.get("x-ms-client-principal-name");
-    if (!name) return res.status(401).json({ error: "Sign in to use this app." });
-    if (principalProvider(req) !== "github" || !ok.has(name.toLowerCase())) {
-      return res.status(403).json({ error: `${name} isn't allowed to use this app.` });
+    const principal = readPrincipal(req);
+    const displayName = req.get("x-ms-client-principal-name");
+    if (!principal && !displayName) return res.status(401).json({ error: "Sign in to use this app." });
+
+    const login = principal?.provider === "github" ? githubLogin(principal.claims) : undefined;
+    if (!login || !ok.has(login.toLowerCase())) {
+      const who = login ?? displayName ?? "This account";
+      const body: Record<string, unknown> = { error: `${who} isn't allowed to use this app.` };
+      if (!login) {
+        // Types only, never values: enough to see which claim carries the login.
+        body.claimTypes = principal?.claims.map((c) => c.typ) ?? [];
+        console.error(`Sign-in denied: no GitHub login claim (provider ${principal?.provider ?? "unknown"}; claims: ${(body.claimTypes as string[]).join(", ") || "none"})`);
+      }
+      return res.status(403).json(body);
     }
-    res.locals.user = name;
+    res.locals.user = login;
     next();
   };
 }
 
-/** The sign-in provider: the IDP header, or auth_typ inside the encoded principal. */
-function principalProvider(req: Request): string | undefined {
-  const idp = req.get("x-ms-client-principal-idp");
-  if (idp) return idp.toLowerCase();
+interface Claim {
+  typ: string;
+  val: string;
+}
+
+/**
+ * The identity Container Apps authentication attaches to each request (it overwrites any
+ * copy a client sends): X-MS-CLIENT-PRINCIPAL is base64 JSON with the provider (auth_typ)
+ * and the provider's claims.
+ */
+function readPrincipal(req: Request): { provider?: string; claims: Claim[] } | undefined {
   const encoded = req.get("x-ms-client-principal");
   if (!encoded) return undefined;
   try {
-    const typ = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")).auth_typ;
-    return typeof typ === "string" ? typ.toLowerCase() : undefined;
+    const p = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+    const claims: Claim[] = Array.isArray(p.claims)
+      ? p.claims.filter((c: any) => typeof c?.typ === "string" && typeof c?.val === "string")
+      : [];
+    const provider = (req.get("x-ms-client-principal-idp") ?? p.auth_typ ?? p.identityProvider) as unknown;
+    return { provider: typeof provider === "string" ? provider.toLowerCase() : undefined, claims };
   } catch {
-    return undefined;
+    return { claims: [] };
   }
+}
+
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
+/**
+ * The GitHub login (username) from the sign-in claims. Only claims GitHub derives from the
+ * login itself are used. The display name, blog, bio and the like are not: any user can set
+ * those to someone else's username.
+ */
+export function githubLogin(claims: Claim[]): string | undefined {
+  const get = (typ: string) => claims.find((c) => c.typ === typ)?.val.trim();
+  const fromUrl = (url: string | undefined, re: RegExp) => (url ? re.exec(url)?.[1] : undefined);
+  const login =
+    get("urn:github:login") ??
+    fromUrl(get("urn:github:url"), /^https:\/\/api\.github\.com\/users\/([^/?#]+)$/) ??
+    fromUrl(get("urn:github:html_url"), /^https:\/\/github\.com\/([^/?#]+)$/);
+  return login && GITHUB_LOGIN.test(login) ? login : undefined;
 }
 
 /** Split a comma-separated environment value, trimming and dropping blanks. */
