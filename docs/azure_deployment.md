@@ -119,7 +119,7 @@ The real assistant, hosted for you alone. It's the same image and the same Conta
 **How it's protected**
 
 - **Sign-in at the door.** Container Apps authentication sends every visitor to GitHub to sign in before any request reaches the app. Only `/healthz` is exempt.
-- **An allowlist in the app.** The platform passes the signed-in identity in `X-MS-CLIENT-PRINCIPAL-*` headers, and overwrites any a client sends. The server admits only GitHub users in `ALLOWED_GITHUB_USERS` (by default the repository owner); anyone else signed in gets a 403. If it's bound to a public address without an allowlist, the server refuses to start.
+- **An allowlist in the app.** The platform passes the signed-in identity in the `X-MS-CLIENT-PRINCIPAL` header, and overwrites any copy a client sends. The server takes the GitHub **login** from that header's claims and admits only logins in `ALLOWED_GITHUB_USERS` (by default the repository owner); anyone else signed in gets a 403. It never matches on the display name, which any GitHub user can set to someone else's username. If it's bound to a public address without an allowlist, the server refuses to start.
 - **Keys in Key Vault.** The Anthropic key, the GitHub token and the OAuth client secret are stored only in Key Vault. The Container App holds references, read with its own managed identity (`Key Vault Secrets User` on that vault only). They never pass through GitHub, the Bicep or the deploy logs.
 - **The same limits as locally:** the per-review dollar cap (`REVIEW_MAX_BUDGET_USD`, default $1), the 10-minute timeout, two runs at a time, and the read-only review agent.
 
@@ -180,7 +180,7 @@ az containerapp revision restart -n codebase-qa -g $RG \
 
 - **The deploy fails with a Key Vault or secret error** (for example "unable to fetch secret") when `PRIVATE_APP_ENABLED` is `true`. A secret from step 4 is missing or misnamed: the names must be exactly `anthropic-api-key`, `github-token` and `github-oauth-secret`.
 - **GitHub says "The redirect_uri is not associated with this application"** when the OAuth app's callback URL doesn't exactly match the one in the run summary.
-- **You sign in and get "… isn't allowed to use this app"** when your GitHub username isn't in `PRIVATE_ALLOWED_USERS` (or the owner default).
+- **You sign in and get "… isn't allowed to use this app"** when your GitHub username (login, not display name) isn't in `PRIVATE_ALLOWED_USERS` (or the owner default). If the response also lists `claimTypes`, the sign-in arrived without a recognizable GitHub login claim; those claim names (no values) show what the platform sent.
 - **Reviews or answers fail with an authentication error** when the Anthropic key or GitHub token in Key Vault is wrong. Fix it as in *Changing a key*.
 
 ## Tearing it down

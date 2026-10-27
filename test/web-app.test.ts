@@ -327,22 +327,35 @@ test("/healthz answers platform probes from any Host; every response carries har
   assert.equal(cfg.headers.get("referrer-policy"), "no-referrer");
 });
 
-test("hosted mode admits only allowlisted GitHub users signed in by the platform", async () => {
+test("hosted mode admits only allowlisted GitHub logins signed in by the platform", async () => {
   const hosted = await startApp({ allowedUsers: ["tpotechno"] });
+  // What Container Apps sends: the display name in -NAME, the provider's claims in the encoded principal.
+  const principal = (auth_typ: string, claims: Array<[string, string]>) =>
+    Buffer.from(JSON.stringify({ auth_typ, claims: claims.map(([typ, val]) => ({ typ, val })) })).toString("base64");
+  const signedIn = (name: string, encoded: string) => ({ "X-MS-CLIENT-PRINCIPAL-NAME": name, "X-MS-CLIENT-PRINCIPAL": encoded });
   try {
     const get = (headers: Record<string, string> = {}) => fetch(`${hosted.base}/api/config`, { headers });
     assert.equal((await get()).status, 401, "no identity: not signed in");
-    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "someone", "X-MS-CLIENT-PRINCIPAL-IDP": "github" })).status, 403);
-    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "tpotechno", "X-MS-CLIENT-PRINCIPAL-IDP": "aad" })).status, 403, "right name, wrong provider");
 
-    const ok = await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "TPOtechno", "X-MS-CLIENT-PRINCIPAL-IDP": "github" });
-    assert.equal(ok.status, 200);
-    assert.equal((await ok.json()).user, "TPOtechno");
+    const owner = await get(signedIn("Todd Oppel", principal("github", [["urn:github:login", "TPOtechno"], ["urn:github:name", "Todd Oppel"]])));
+    assert.equal(owner.status, 200, "matched on the login, case-insensitively, not the display name");
+    assert.equal((await owner.json()).user, "TPOtechno");
 
-    const principal = (auth_typ: string) => Buffer.from(JSON.stringify({ auth_typ, claims: [] })).toString("base64");
-    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "tpotechno", "X-MS-CLIENT-PRINCIPAL": principal("github") })).status, 200, "provider read from the encoded principal");
-    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "tpotechno", "X-MS-CLIENT-PRINCIPAL": principal("aad") })).status, 403);
-    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "tpotechno", "X-MS-CLIENT-PRINCIPAL": "not base64 json" })).status, 403);
+    const viaUrl = await get(signedIn("Todd Oppel", principal("github", [["urn:github:url", "https://api.github.com/users/tpotechno"]])));
+    assert.equal(viaUrl.status, 200, "login taken from the API URL claim when there is no login claim");
+
+    const impostor = await get(signedIn("tpotechno", principal("github", [["urn:github:login", "mallory"], ["urn:github:name", "tpotechno"]])));
+    assert.equal(impostor.status, 403, "a display name set to the owner's username does not get in");
+    assert.match((await impostor.json()).error, /^mallory isn't allowed/);
+
+    const blogOnly = await get(signedIn("Todd Oppel", principal("github", [["urn:github:blog", "https://github.com/tpotechno"]])));
+    assert.equal(blogOnly.status, 403, "user-editable claims are never used");
+    assert.deepEqual((await blogOnly.json()).claimTypes, ["urn:github:blog"], "a denial without a login lists claim types (not values)");
+
+    assert.equal((await get(signedIn("tpotechno", principal("aad", [["urn:github:login", "tpotechno"]])))).status, 403, "wrong provider");
+    assert.equal((await get({ "X-MS-CLIENT-PRINCIPAL-NAME": "tpotechno" })).status, 403, "a name alone is not an identity");
+    assert.equal((await get(signedIn("tpotechno", "not base64 json"))).status, 403);
+    assert.equal((await get(signedIn("x", principal("github", [["urn:github:login", "bad/../login"]])))).status, 403, "malformed login");
 
     const anon = await fetch(`${hosted.base}/api/ask`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "hi" }) });
     assert.equal(anon.status, 401, "API calls are gated too");
