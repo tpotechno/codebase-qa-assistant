@@ -324,7 +324,8 @@ test("/healthz answers platform probes from any Host; every response carries har
 
   const cfg = await fetch(`${base}/api/config`);
   assert.equal(cfg.headers.get("x-frame-options"), "DENY");
-  assert.equal(cfg.headers.get("referrer-policy"), "no-referrer");
+  // same-origin, never no-referrer: Container Apps sign-in rejects signed-in POSTs without a Referer.
+  assert.equal(cfg.headers.get("referrer-policy"), "same-origin");
 });
 
 test("hosted mode admits only allowlisted GitHub logins signed in by the platform", async () => {

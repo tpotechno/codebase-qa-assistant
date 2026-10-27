@@ -98,7 +98,7 @@ Every change to the Azure resources goes through the Bicep files, so the infrast
 ## Security notes
 
 - **The server only answers its own host name.** The Bicep passes the Container App's FQDN as `PUBLIC_HOSTS`, and the existing Host and Origin checks reject everything else. Only `/healthz` is answered for any Host, because the platform's probes arrive by IP.
-- **Every response sets `nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`.**
+- **Every response sets `nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin`.** The page sends a `Referer` only to the app itself, never to other sites. It has to be `same-origin` rather than `no-referrer`: Container Apps authentication refuses signed-in POSTs that carry no `Referer`.
 - **The image contains no secrets.** `.dockerignore` excludes `.env`, git history and local `node_modules`. The container runs as the unprivileged `node` user.
 - **Visitors can't steer the tools.** The scripted model makes the same calls every time, and `read_file` refuses paths outside the repository in any case.
 - **One replica at most.** Drafts waiting to be "posted" live in memory, so a second replica could receive the post for a draft it never saw. The scripted demo needs nothing more.
@@ -181,6 +181,7 @@ az containerapp revision restart -n codebase-qa -g $RG \
 - **The deploy fails with a Key Vault or secret error** (for example "unable to fetch secret") when `PRIVATE_APP_ENABLED` is `true`. A secret from step 4 is missing or misnamed: the names must be exactly `anthropic-api-key`, `github-token` and `github-oauth-secret`.
 - **GitHub says "The redirect_uri is not associated with this application"** when the OAuth app's callback URL doesn't exactly match the one in the run summary.
 - **You sign in and get "… isn't allowed to use this app"** when your GitHub username (login, not display name) isn't in `PRIVATE_ALLOWED_USERS` (or the owner default). If the response also lists `claimTypes`, the sign-in arrived without a recognizable GitHub login claim; those claim names (no values) show what the platform sent.
+- **Every Ask or Review fails with an empty `403`**, and the response has `x-ms-middleware-request-id` but no `x-frame-options`. The sign-in layer refused the POST before it reached the app, which happens when the request carries no `Referer`. The app's `Referrer-Policy: same-origin` makes the browser send one; check that a proxy or browser extension isn't stripping it.
 - **Reviews or answers fail with an authentication error** when the Anthropic key or GitHub token in Key Vault is wrong. Fix it as in *Changing a key*.
 
 ## Tearing it down

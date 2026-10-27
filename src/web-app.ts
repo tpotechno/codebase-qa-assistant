@@ -237,11 +237,16 @@ export function parseList(raw: string | undefined): string[] {
     .filter(Boolean);
 }
 
-/** Browser hardening for every response: no sniffing, no framing, no referrer leaks. */
+/**
+ * Browser hardening for every response: no sniffing, no framing, no referrer to other sites.
+ * The referrer policy is same-origin, not no-referrer: Azure Container Apps authentication
+ * refuses a signed-in POST that carries no Referer (an empty 403 from its middleware), so
+ * the app's own page must send one to the app. Other sites still receive none.
+ */
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Referrer-Policy", "same-origin");
   next();
 }
 
