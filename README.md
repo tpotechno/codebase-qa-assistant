@@ -1,8 +1,10 @@
 # Codebase Q&A and PR Review Assistant
 
-An agentic assistant built on the Claude API that answers questions about a codebase and reviews GitHub pull requests, grounded in the actual code and docs. Its tools are served by a custom **MCP server** over Streamable HTTP, so the same tools work for this app, Claude Code, and any other MCP client.
+An agentic assistant built on the Claude API that answers questions about a codebase and reviews GitHub pull requests, grounded in the actual code and docs. Its tools are served by a custom **MCP server** over Streamable HTTP, so the same tools work for this app, Claude Code, and any other MCP client. It runs on **Azure Container Apps**, deployed from GitHub Actions on every merge.
 
-**Stack:** TypeScript / Node, Claude API (`@anthropic-ai/sdk`), Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`), Model Context Protocol (`@modelcontextprotocol/sdk`), GitHub REST API, Express, Angular 21 (signals, zoneless).
+**[▶ Try the live demo](https://codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io)**. It runs a scripted model over this repo's own source, so no sign-up or API key is needed. Try **Ask a question**, then **Review a pull request** on the sample PR.
+
+**Stack:** TypeScript / Node, Claude API (`@anthropic-ai/sdk`), Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`), Model Context Protocol (`@modelcontextprotocol/sdk`), GitHub REST API, Express, Angular 21 (signals, zoneless). **Cloud:** Azure Container Apps, Container Registry, Key Vault, Bicep, GitHub Actions with OIDC.
 
 ![Asking a question: the answer streams in on the left, the agent's steps on the right](docs/screenshots/ask.png)
 
@@ -12,8 +14,8 @@ An agentic assistant built on the Claude API that answers questions about a code
 - **Phase 2 — complete.** Custom MCP server (Streamable HTTP) with code search, file reading, and documentation retrieval; the agent discovers its tools from the server at runtime.
 - **Phase 3 — complete.** Pull-request review: GitHub PR tools on the MCP server, and a `review` command orchestrated by the Claude Agent SDK that returns a structured, line-anchored review and can publish it to GitHub.
 - **Phase 4 — complete.** Angular web UI: streaming answers, a live trace of every tool call, and PR reviews you can read before posting the exact draft to GitHub.
-- **Phase 5 — in progress.** Hosting on Azure. Every merge deploys from GitHub Actions to Azure Container Apps, with infrastructure as code (Bicep) and keyless OIDC sign-in:
-  - a public, scripted demo;
+- **Phase 5 — complete.** Hosting on Azure. Every merge deploys from GitHub Actions to Azure Container Apps, with infrastructure as code (Bicep) and keyless OIDC sign-in:
+  - a [public, scripted demo](https://codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io);
   - the real assistant, private behind GitHub sign-in and an allowlist, with its keys in Key Vault.
 
 ### Tools
@@ -100,7 +102,7 @@ Uses the same `.env` as the command line. Two modes:
 
 **Try it without an API key:** `npm run web:demo` serves the UI on port 3335 with a scripted stand-in for Claude. The repo tools run for real against this repository; the review uses a sample PR (`acme/widgets#7`) from an in-memory GitHub, and nothing is sent anywhere.
 
-**Hosted demo:** the same scripted demo runs on Azure Container Apps, deployed by `.github/workflows/deploy.yml`. The URL is on the repository's `azure-demo` environment. See [docs/azure_deployment.md](docs/azure_deployment.md) for how it's built and the one-time Azure setup. To run the container locally: `docker build -t codebase-qa-demo . && docker run -p 3335:3335 codebase-qa-demo`.
+**Hosted demo:** the same scripted demo is live at [codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io](https://codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io). To run the container locally: `docker build -t codebase-qa-demo . && docker run -p 3335:3335 codebase-qa-demo`.
 
 **Developing the UI:** run `npm run web` in one terminal and `npm run web:dev` in another, then open http://localhost:4200. `ng serve` reloads on save and proxies `/api` to the server.
 
@@ -109,6 +111,22 @@ Uses the same `.env` as the command line. Two modes:
 | Variable | Default | Purpose |
 |---|---|---|
 | `WEB_PORT` | `3334` | Port for `npm run web` |
+
+## Running on Azure
+
+Two apps run on Azure Container Apps from one container image. `.github/workflows/deploy.yml` builds and deploys both on every merge to `main`:
+
+- **Public demo** (`codebase-qa-demo`). This is `npm run web:demo` in a container. It has no keys, so it costs nothing in model usage, and visitors can't steer its tools.
+- **Private app** (`codebase-qa`). This is the real assistant (`npm run web`): Claude, the Agent SDK reviewer, and posting to GitHub. Container Apps authentication signs visitors in with GitHub, and the server admits only allowlisted GitHub logins. The Anthropic key, GitHub token and OAuth secret live in Key Vault, and the app holds only references to them.
+
+How it's put together:
+
+- **No stored Azure credential.** GitHub Actions signs in with OpenID Connect, trusted for this repo's `azure-demo` environment only.
+- **Everything in Bicep.** `infra/registry.bicep`, `infra/main.bicep` and `infra/private.bicep` define the registry, logging, environment, identities, Key Vault and both apps.
+- **Checked on every deploy.** Smoke tests confirm the demo is healthy, and that the private app is up and refuses requests that aren't signed in.
+- **About $5 a month.** Both apps scale to zero, so the cost is mostly the registry.
+
+Setup, step by step: [docs/azure_deployment.md](docs/azure_deployment.md). Design and decisions: [docs/azure_design.md](docs/azure_design.md) ([PDF](docs/azure_design.pdf)).
 
 ### Using the MCP server from Claude Code
 
@@ -167,6 +185,9 @@ The tests need no API key or network. The web API tests stream real Server-Sent 
 │    Streamable HTTP · stateless · bearer auth  │
 ├──────────────────────────────────────────────┤
 │  Data: repo files · doc index (BM25) · GitHub │  Phase 2–3
+├──────────────────────────────────────────────┤
+│  Azure Container Apps: demo + private app     │  Phase 5
+│    GitHub Actions (OIDC) · Bicep · Key Vault  │
 └──────────────────────────────────────────────┘
 ```
 
@@ -174,13 +195,13 @@ Design docs:
 - **Phase 2, MCP server:** [docs/mcp_server_design.md](docs/mcp_server_design.md) ([PDF](docs/mcp_server_design.pdf))
 - **Phase 3, PR review:** [docs/pr_review_design.md](docs/pr_review_design.md) ([PDF](docs/pr_review_design.pdf))
 - **Phase 4, web UI:** [docs/web_ui_design.md](docs/web_ui_design.md) ([PDF](docs/web_ui_design.pdf))
-- **Phase 5, Azure deployment:** [docs/azure_deployment.md](docs/azure_deployment.md)
+- **Phase 5, Azure deployment:** [docs/azure_design.md](docs/azure_design.md) ([PDF](docs/azure_design.pdf)); setup guide [docs/azure_deployment.md](docs/azure_deployment.md)
 
-The Phase 3 and 4 PDFs are generated from their Markdown, e.g. `python scripts/md_to_pdf.py docs/web_ui_design.md docs/web_ui_design.pdf` (requires `pip install reportlab`).
+The Phase 3–5 PDFs are generated from their Markdown, e.g. `python scripts/md_to_pdf.py docs/web_ui_design.md docs/web_ui_design.pdf` (requires `pip install reportlab`).
 
 **Design notes**
 
-- **Client-side MCP.** The agent connects to the server with the MCP client SDK, lists its tools, and translates them into Messages API tool definitions. This works against a server on `localhost`. (The Messages API's built-in MCP connector needs a publicly reachable server, which fits the hosted deployment in Phase 5.)
+- **Client-side MCP.** The agent connects to the server with the MCP client SDK, lists its tools, and translates them into Messages API tool definitions. This works against a server on `localhost`, and in the hosted apps against a private server inside the container. (The Messages API's built-in MCP connector needs a publicly reachable server; hosting the MCP server as its own endpoint is on the roadmap.)
 - **Pluggable tool source.** The agent loop depends only on a `ToolProvider` interface, so in-process tools and MCP tools are interchangeable — and new server tools reach the agent with no agent code change.
 - **Stateless server.** Each request gets a fresh server and transport, so it can scale horizontally behind a load balancer.
 - **Two orchestration styles, on purpose.** `ask` keeps the hand-written Messages API loop; `review` uses the Claude Agent SDK, which owns the tool loop, MCP connection, permissions, turn limit, spend cap, and structured output. Same tools, two ways to drive them.
@@ -191,9 +212,11 @@ The Phase 3 and 4 PDFs are generated from their Markdown, e.g. `python scripts/m
 
 ## Roadmap
 
-- **Phase 5 — Production.**
-  - Done: a public demo and a private real deployment on Azure Container Apps.
-  - Next: an evaluation suite (answer grounding, review quality), tracing, and Azure DevOps pull requests.
+- **Evaluation suite.** Answer grounding and review quality, scored on a labeled set and run in CI.
+- **Hosted MCP endpoint.** The MCP server as its own Container App behind a bearer token, usable from any MCP client.
+- **More than one repository.** The private app clones a chosen repo, instead of asking only about the source built into its image.
+- **Azure DevOps pull requests**, behind the same interface as GitHub.
+- **Tracing** of agent runs (OpenTelemetry).
 
 ## License
 

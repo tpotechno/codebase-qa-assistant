@@ -40,6 +40,7 @@ h1 = ParagraphStyle("h1", parent=base, fontName="Helvetica-Bold", fontSize=14, l
 h2 = ParagraphStyle("h2", parent=base, fontName="Helvetica-Bold", fontSize=11, leading=15, spaceBefore=8, spaceAfter=4)
 bullet = ParagraphStyle("bullet", parent=base, leftIndent=14, bulletIndent=3, spaceAfter=3)
 numbered = ParagraphStyle("numbered", parent=base, leftIndent=16, bulletIndent=2, spaceAfter=3)
+subbullet = ParagraphStyle("subbullet", parent=base, leftIndent=30, bulletIndent=18, spaceAfter=2)
 small = ParagraphStyle("small", parent=base, fontSize=8.5, leading=11.5, textColor=MUTED)
 cell = ParagraphStyle("cell", parent=base, fontSize=8.8, leading=12, spaceAfter=0)
 cellb = ParagraphStyle("cellb", parent=cell, fontName="Helvetica-Bold")
@@ -171,7 +172,48 @@ def web_ui_diagram():
     return d
 
 
-DIAGRAMS = {"pr_review_design": pr_review_diagram, "web_ui_design": web_ui_diagram}
+def azure_diagram():
+    W, H = 468, 330
+    d = Drawing(W, H)
+    _box(d, 2, 262, 104, 46, "GitHub Actions", "deploy.yml, OIDC")
+    _box(d, 2, 172, 104, 40, "Visitors", "public demo", fill=colors.white)
+    _box(d, 2, 96, 104, 40, "Owner", "signs in with GitHub", fill=colors.white)
+
+    _group(d, 124, 52, 342, 274, "Azure resource group (all resources in Bicep)")
+    _box(d, 136, 256, 98, 42, "Container Registry", "image per commit")
+    _box(d, 246, 256, 98, 42, "Key Vault", "secrets, read by ref")
+    _box(d, 356, 256, 98, 42, "Log Analytics", "1 GB/day cap")
+
+    # Environment group, labelled at the bottom so arrows entering from above stay clear.
+    d.add(Rect(136, 64, 318, 168, rx=6, ry=6, fillColor=None, strokeColor=RULE, strokeDashArray=[3, 3]))
+    d.add(String(144, 70, "Container Apps environment (scale to zero)", fontName="Helvetica", fontSize=7.2,
+                 fillColor=MUTED))
+    _box(d, 148, 168, 126, 48, "codebase-qa-demo", "scripted demo, no keys", fill=colors.white)
+    _box(d, 300, 168, 142, 40, "Platform sign-in", "GitHub OAuth, /healthz exempt")
+    _box(d, 300, 84, 142, 64, "codebase-qa (private)", "allowlist on GitHub login", fill=colors.white)
+    d.add(String(371, 93, "Claude API · Agent SDK · MCP", fontName="Helvetica", fontSize=7, fillColor=MUTED,
+                 textAnchor="middle"))
+    _arrow(d, 371, 168, 371, 148)
+
+    _arrow(d, 106, 290, 136, 284, "push", 0, 6)
+    _arrow(d, 106, 266, 160, 216, "deploy", -16, -4)
+    _arrow(d, 106, 192, 148, 192)
+    _arrow(d, 106, 112, 300, 172)
+    _arrow(d, 196, 256, 210, 216)
+    _arrow(d, 214, 256, 316, 208)
+    _arrow(d, 304, 256, 420, 208)
+    d.add(String(392, 241, "secret refs", fontName="Helvetica", fontSize=7, fillColor=MUTED, textAnchor="middle"))
+
+    _box(d, 230, 6, 110, 32, "Claude API", None, fill=colors.white)
+    _box(d, 352, 6, 110, 32, "GitHub REST API", None, fill=colors.white)
+    _arrow(d, 330, 84, 290, 38)
+    _arrow(d, 410, 84, 406, 38)
+    d.add(String(2, -8, "Arrows from the registry are image pulls by each app's managed identity; no registry password exists.",
+                 fontName="Helvetica", fontSize=7, fillColor=MUTED))
+    return d
+
+
+DIAGRAMS = {"pr_review_design": pr_review_diagram, "web_ui_design": web_ui_diagram, "azure_design": azure_diagram}
 
 
 # ---------- Markdown -> flowables ----------
@@ -185,8 +227,14 @@ def build(md_path: str, pdf_path: str):
     def flush_list(items, ordered):
         if not items:
             return
-        for n, it in enumerate(items, 1):
-            story.append(Paragraph(inline(it), numbered if ordered else bullet,
+        n = 0
+        for it in items:
+            level, text = it if isinstance(it, tuple) else (0, it)
+            if level:
+                story.append(Paragraph(inline(text), subbullet, bulletText="–"))
+                continue
+            n += 1
+            story.append(Paragraph(inline(text), numbered if ordered else bullet,
                                    bulletText=f"{n}." if ordered else "•"))
 
     while i < len(lines):
@@ -227,21 +275,25 @@ def build(md_path: str, pdf_path: str):
             story.append(Spacer(1, 6))
         elif re.match(r"^- ", line):
             items = []
-            while i < len(lines) and re.match(r"^- ", lines[i]):
-                items.append(lines[i][2:].strip())
+            while i < len(lines) and re.match(r"^(\s{2,})?- ", lines[i]):
+                nested = lines[i].startswith(" ")
+                items.append((1 if nested else 0, lines[i].strip()[2:].strip()))
                 i += 1
             i -= 1
             flush_list(items, False)
         elif re.match(r"^\d+\. ", line):
             items = []
-            while i < len(lines) and re.match(r"^\d+\. ", lines[i]):
-                items.append(re.sub(r"^\d+\.\s+", "", lines[i]))
+            while i < len(lines) and re.match(r"^(\d+\. |\s{2,}- )", lines[i]):
+                if lines[i].startswith(" "):
+                    items.append((1, lines[i].strip()[2:].strip()))
+                else:
+                    items.append((0, re.sub(r"^\d+\.\s+", "", lines[i])))
                 i += 1
             i -= 1
             flush_list(items, True)
         elif line.strip():
             para = [line.strip()]
-            while i + 1 < len(lines) and lines[i + 1].strip() and not re.match(r"^(#|```|\||- |\d+\. )", lines[i + 1]):
+            while i + 1 < len(lines) and lines[i + 1].strip() and not re.match(r"^(#|```|\||\s*- |\d+\. )", lines[i + 1]):
                 i += 1
                 para.append(lines[i].strip())
             text = " ".join(para)
