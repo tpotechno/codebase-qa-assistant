@@ -218,6 +218,9 @@ The Phase 3–5 PDFs are generated from their Markdown, e.g. `python scripts/md_
 - **Azure DevOps pull requests**, behind the same interface as GitHub.
 - **Tracing** of agent runs (OpenTelemetry).
 
+
 ## License
 
-MIT
+Copyright © 2026 Todd Oppel. All rights reserved. The code is public for viewing
+and evaluation; it may not be used, copied, modified or distributed without permission.
+See [LICENSE](LICENSE).
