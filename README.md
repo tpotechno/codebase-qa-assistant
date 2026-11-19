@@ -192,12 +192,13 @@ The tests need no API key or network. The web API tests stream real Server-Sent 
 ```
 
 Design docs:
+- **Phase 1, tool loop:** [docs/tool_loop_design.md](docs/tool_loop_design.md) ([PDF](docs/tool_loop_design.pdf))
 - **Phase 2, MCP server:** [docs/mcp_server_design.md](docs/mcp_server_design.md) ([PDF](docs/mcp_server_design.pdf))
 - **Phase 3, PR review:** [docs/pr_review_design.md](docs/pr_review_design.md) ([PDF](docs/pr_review_design.pdf))
 - **Phase 4, web UI:** [docs/web_ui_design.md](docs/web_ui_design.md) ([PDF](docs/web_ui_design.pdf))
 - **Phase 5, Azure deployment:** [docs/azure_design.md](docs/azure_design.md) ([PDF](docs/azure_design.pdf)); setup guide [docs/azure_deployment.md](docs/azure_deployment.md)
 
-The Phase 3–5 PDFs are generated from their Markdown, e.g. `python scripts/md_to_pdf.py docs/web_ui_design.md docs/web_ui_design.pdf` (requires `pip install reportlab`).
+The Phase 1 and 3–5 PDFs are generated from their Markdown, e.g. `python scripts/md_to_pdf.py docs/web_ui_design.md docs/web_ui_design.pdf` (requires `pip install reportlab`).
 
 **Design notes**
 
