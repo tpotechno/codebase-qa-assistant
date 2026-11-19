@@ -213,7 +213,28 @@ def azure_diagram():
     return d
 
 
-DIAGRAMS = {"pr_review_design": pr_review_diagram, "web_ui_design": web_ui_diagram, "azure_design": azure_diagram}
+
+def tool_loop_diagram():
+    # Phase 1: CLI -> hand-written loop -> Claude API, with read-only tools confined to REPO_PATH
+    W, H = 468, 230
+    d = Drawing(W, H)
+    _group(d, 2, 4, 236, 222, "ask command (npm run ask)")
+    _box(d, 16, 166, 208, 40, "index.ts — CLI", "question in · answer to stdout · usage to stderr")
+    _box(d, 16, 98, 208, 44, "agent.ts — hand-written loop", "send · run tools · return results · repeat")
+    _box(d, 16, 18, 208, 52, "tools.ts", "search_code · read_file · safeResolve()", fill=colors.white)
+    _arrow(d, 120, 166, 120, 142)
+    _arrow(d, 120, 98, 120, 70, "tool_use", 26, 0)
+
+    _box(d, 300, 120, 164, 52, "Claude Messages API", "system · tools · messages", fill=colors.white)
+    _arrow(d, 224, 128, 300, 150, "messages.create", 0, 12)
+    _arrow(d, 300, 134, 224, 114, "text / tool_use", 0, -18)
+
+    _box(d, 300, 18, 164, 52, "Repository at REPO_PATH", "read-only · never outside it", fill=colors.white)
+    _arrow(d, 224, 44, 300, 44, "read", 0, 5)
+    return d
+
+DIAGRAMS = {"pr_review_design": pr_review_diagram, "web_ui_design": web_ui_diagram, "azure_design": azure_diagram,
+            "tool_loop_design": tool_loop_diagram}
 
 
 # ---------- Markdown -> flowables ----------
