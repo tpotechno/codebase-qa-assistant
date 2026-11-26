@@ -58,7 +58,7 @@ The default model is `claude-sonnet-5-5`, overridable with `CLAUDE_MODEL`. Don't
 | 4 | Angular web UI: streaming answers, a live tool-call trace, PR reviews posted by draft id; the scripted demo mode | #2 |
 | 5 | Azure Container Apps: a public demo and a private real app, Bicep, OIDC deploys, Key Vault, GitHub sign-in | #3–#8 |
 | Docs | The Phase 1 design doc written after the fact; `CLAUDE.md` and `.claude/rules/` | #9 |
-| 6 | Ask about any codebase: a folder path or a GitHub repo, shallow-cloned into a size-capped cache; `/mcp/<id>`; real-path checks in `read_file`; `--repo` on the CLI; the demo's tour for other repos | #10 |
+| 6 | Ask about any codebase: a folder path or a GitHub repo, shallow-cloned into a size-capped cache; `/mcp/<id>`; real-path checks in `read_file`; `--repo` on the CLI; the demo's tour for other repos | #11 |
 
 Each phase was reviewed by the project's own PR reviewer, and its findings were fixed before merging.
 
