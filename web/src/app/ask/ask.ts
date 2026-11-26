@@ -3,7 +3,8 @@ import { DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../api';
 import { MarkdownPipe } from '../markdown.pipe';
-import { AppConfig, TraceStep } from '../models';
+import { AppConfig, RepoInfo, TraceStep } from '../models';
+import { RepoPicker } from '../repo-picker/repo-picker';
 import { SseEvent } from '../sse';
 import { summarizeTool } from '../tool-summary';
 import { Trace } from '../trace/trace';
@@ -17,7 +18,7 @@ interface AskStats {
 
 @Component({
   selector: 'app-ask',
-  imports: [DecimalPipe, FormsModule, MarkdownPipe, Trace],
+  imports: [DecimalPipe, FormsModule, MarkdownPipe, RepoPicker, Trace],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './ask.html',
   styleUrl: './ask.scss',
@@ -33,11 +34,21 @@ export class Ask {
   protected readonly running = signal(false);
   protected readonly error = signal('');
   protected readonly stats = signal<AskStats | null>(null);
+  /** The codebase chosen in the picker; null means the server's built-in one. */
+  protected readonly repo = signal<RepoInfo | null>(null);
+  protected readonly repoName = computed(
+    () => this.repo()?.name ?? this.config()?.repoName ?? 'this codebase',
+  );
 
-  /** The demo answers one scripted question, so it suggests only that one. */
+  /**
+   * The demo scripts one question about its own code, and a short tour for any other
+   * repository, so it suggests only what it can show.
+   */
   protected readonly suggestions = computed(() =>
     this.config()?.demo
-      ? ['How does the review agent stay read-only?']
+      ? this.repo()
+        ? ['Give me a short tour of this codebase.']
+        : ['How does the review agent stay read-only?']
       : [
           'Give me a short tour of this codebase.',
           'Where is configuration loaded, and what can be configured?',
@@ -78,7 +89,14 @@ export class Ask {
     this.controller = new AbortController();
 
     try {
-      await this.api.stream('/api/ask', { question }, (e) => this.handle(e), this.controller.signal);
+      // repoId only for a chosen codebase; without it the server uses its own repository.
+      const repoId = this.repo()?.id;
+      await this.api.stream(
+        '/api/ask',
+        repoId ? { question, repoId } : { question },
+        (e) => this.handle(e),
+        this.controller.signal,
+      );
     } catch (e) {
       if ((e as Error).name !== 'AbortError') this.error.set((e as Error).message);
     } finally {

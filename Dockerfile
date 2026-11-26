@@ -11,9 +11,15 @@ RUN npx ng build
 
 # ---- Runtime ----
 FROM node:24-slim
+# git: Ask can open a GitHub repository, which is shallow-cloned on demand (src/repos.ts).
+# ca-certificates: so git can verify github.com over https. No other packages are added.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     DEMO_HOST=0.0.0.0 \
-    DEMO_PORT=3335
+    DEMO_PORT=3335 \
+    REPO_CACHE_DIR=/tmp/codebase-qa-repos
 # The folder name is what the UI shows as the repository being asked about.
 WORKDIR /codebase-qa-assistant
 COPY package.json package-lock.json ./

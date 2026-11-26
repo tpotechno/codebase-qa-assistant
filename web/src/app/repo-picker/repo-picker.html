@@ -1,0 +1,46 @@
+@if (available()) {
+  <form class="picker" (submit)="onSubmit($event)">
+    <label for="location">Codebase</label>
+    <div class="row">
+      <input
+        id="location"
+        name="location"
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        [value]="location()"
+        (input)="onInput($event)"
+        [disabled]="loading() || disabled()"
+        [placeholder]="placeholder()"
+        aria-describedby="location-status"
+      />
+      @if (loading()) {
+        <button type="button" class="secondary" (click)="cancel()">Cancel</button>
+      } @else {
+        <button type="submit" class="secondary" [disabled]="!location().trim() || disabled()">
+          Open
+        </button>
+      }
+    </div>
+    <p id="location-status" class="hint" aria-live="polite">
+      @if (loading()) {
+        Opening… a GitHub repository is downloaded first, which can take a moment.
+      } @else {
+        Asking about
+        @if (repo()?.url; as url) {
+          <a [href]="url" target="_blank" rel="noopener">{{ status() }}</a>
+        } @else {
+          <strong>{{ status() }}</strong>
+        }
+        @if (repo()) {
+          · <button type="button" class="link" (click)="useDefault()" [disabled]="disabled()">
+            back to {{ config()?.repoName }}
+          </button>
+        }
+      }
+    </p>
+    @if (error()) {
+      <p class="error" role="alert">{{ error() }}</p>
+    }
+  </form>
+}

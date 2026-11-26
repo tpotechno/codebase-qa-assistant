@@ -17,7 +17,10 @@ export interface FakeGitHub {
   requests: Array<{ method: string; path: string; body?: any; auth?: string }>;
 }
 
-export function fakeGitHub(opts: { fileCount?: number } = {}): FakeGitHub {
+/** Commit the fake's "dev" branch points at (main is HEAD_SHA). */
+export const DEV_SHA = "0f9e8d7c6b5a493827160f9e8d7c6b5a49382716";
+
+export function fakeGitHub(opts: { fileCount?: number; repoSizeKb?: number; privateRepo?: boolean } = {}): FakeGitHub {
   const requests: FakeGitHub["requests"] = [];
   const extra = Array.from({ length: Math.max(0, (opts.fileCount ?? 1) - 1) }, (_, i) => ({
     filename: `docs/file${i}.md`,
@@ -45,6 +48,22 @@ export function fakeGitHub(opts: { fileCount?: number } = {}): FakeGitHub {
       body: init.body ? JSON.parse(init.body as string) : undefined,
       auth: headers?.Authorization,
     });
+
+    // Repository metadata and branch heads, for opening the repo in Ask (repos.ts).
+    if (method === "GET" && u.pathname === "/repos/acme/widgets") {
+      return json(200, {
+        full_name: "acme/widgets",
+        default_branch: "main",
+        size: opts.repoSizeKb ?? 120,
+        private: Boolean(opts.privateRepo),
+        html_url: "https://github.com/acme/widgets",
+      });
+    }
+    const commit = /^\/repos\/acme\/widgets\/commits\/(.+)$/.exec(u.pathname);
+    if (method === "GET" && commit) {
+      const sha = { main: HEAD_SHA, dev: DEV_SHA }[decodeURIComponent(commit[1])];
+      return sha ? json(200, { sha }) : json(422, { message: "No commit found for SHA" });
+    }
 
     const m = /^\/repos\/acme\/widgets\/pulls\/(\d+)(\/files|\/reviews)?$/.exec(u.pathname);
     if (!m || m[1] !== "7") return json(404, { message: "Not Found" });

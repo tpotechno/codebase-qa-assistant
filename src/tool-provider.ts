@@ -16,13 +16,16 @@ export interface ToolProvider {
   close(): Promise<void>;
 }
 
-/** Phase 1 behavior: tools run in-process. */
-export function localToolProvider(): ToolProvider {
+/**
+ * Phase 1 behavior: tools run in-process. `root` confines them to a chosen repository
+ * (e.g. one picked with `npm run ask -- --repo ...`); omitted, they use repoRoot().
+ */
+export function localToolProvider(root?: string): ToolProvider {
   return {
     source: "local",
     listTools: async () => toolDefinitions,
     callTool: async (name, input) => {
-      const content = await executeTool(name, input);
+      const content = await executeTool(name, input, root);
       return { content, isError: content.startsWith("Error:") };
     },
     close: async () => {},

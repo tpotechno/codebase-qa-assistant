@@ -6,8 +6,8 @@ A single briefing on this project: what it is, how it's built, where everything 
 |---|---|
 | Owner | Todd Oppel (GitHub `tpotechno`) |
 | Repository | github.com/tpotechno/codebase-qa-assistant (public to view; all rights reserved) |
-| Version | 0.6.2 |
-| Status | Phases 1–5 complete; live on Azure |
+| Version | 0.7.0 |
+| Status | Phases 1–6 complete; live on Azure |
 | Last updated | November 26, 2026 |
 
 Related documents:
@@ -19,6 +19,7 @@ Related documents:
   - Phase 3, PR review: [pr_review_design.md](pr_review_design.md)
   - Phase 4, the web UI: [web_ui_design.md](web_ui_design.md)
   - Phase 5, Azure: [azure_design.md](azure_design.md)
+  - Phase 6, choosing a codebase: [repo_selection_design.md](repo_selection_design.md) (plan: [repo_selection_plan.md](repo_selection_plan.md))
 - **Azure setup and troubleshooting:** [azure_deployment.md](azure_deployment.md)
 - **Live demo:** https://codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io
 
@@ -26,7 +27,7 @@ Related documents:
 
 An agentic assistant built on the Claude API with two jobs:
 
-- **Ask.** Answer questions about a codebase, grounded in the actual code and docs. The agent searches the code, reads files and searches the documentation, then answers with `file:line` citations.
+- **Ask.** Answer questions about a codebase (the server's own, a local folder, or a GitHub repository the person opens), grounded in the actual code and docs. The agent searches the code, reads files and searches the documentation, then answers with `file:line` citations.
 - **Review.** Review a GitHub pull request. An agent reads the PR and its whole diff, looks up surrounding code when it needs context, and returns a structured review with line-anchored comments. A person can then post it to GitHub as a single **comment** review. It never approves or requests changes.
 
 Its tools are served by a custom **MCP server** over Streamable HTTP, so the same tools work for this app, for Claude Code and for any other MCP client.
@@ -57,6 +58,7 @@ The default model is `claude-sonnet-5-5`, overridable with `CLAUDE_MODEL`. Don't
 | 4 | Angular web UI: streaming answers, a live tool-call trace, PR reviews posted by draft id; the scripted demo mode | #2 |
 | 5 | Azure Container Apps: a public demo and a private real app, Bicep, OIDC deploys, Key Vault, GitHub sign-in | #3–#8 |
 | Docs | The Phase 1 design doc written after the fact; `CLAUDE.md` and `.claude/rules/` | #9 |
+| 6 | Ask about any codebase: a folder path or a GitHub repo, shallow-cloned into a size-capped cache; `/mcp/<id>`; real-path checks in `read_file`; `--repo` on the CLI; the demo's tour for other repos | #10 |
 
 Each phase was reviewed by the project's own PR reviewer, and its findings were fixed before merging.
 
@@ -67,6 +69,7 @@ Angular UI (web/) --SSE over fetch--> Web API (src/web-app.ts)                Ph
   ask:    src/agent.ts   hand-written Messages API loop -> ToolProvider        Phase 1-2
   review: src/review.ts  Claude Agent SDK, read-only tools, JSON schema output  Phase 3
 MCP server (src/mcp-server.ts): Streamable HTTP, stateless, bearer auth        Phase 2-3
+Repos (src/repos.ts): location -> policy -> folder or shallow clone -> id     Phase 6
 Data: repo files (safeResolve) | doc index (BM25) | GitHub REST (github.ts)
 Azure Container Apps: demo + private app, OIDC deploys, Bicep, Key Vault       Phase 5
 ```
@@ -76,13 +79,15 @@ Key design points:
 - **Two orchestration styles on purpose.** Ask uses a hand-written loop. Review uses the Agent SDK, which owns the loop, the MCP connection, permissions, the turn limit, the spend cap and structured output.
 - **A pluggable tool source.** The Ask loop depends only on a `ToolProvider` interface. The tools can run in-process (`localToolProvider`) or over MCP (`mcpToolProvider`).
 - **The model never gets the write tool.** The review agent's allowlist is read-only. Posting is a separate step a person triggers.
+- **The person picks the codebase, never the model.** `/api/repo` resolves a location to a server-issued id. The MCP server serves that root at `/mcp/<id>`, and the tools' contracts are unchanged.
 - **Lexical retrieval.** `search_docs` uses BM25 over heading-chunked Markdown, with no embeddings. Its interface would allow swapping in an embedding retriever later.
 
 ## 5. Repository layout
 
 | Path | What's there |
 |---|---|
-| `src/tools.ts` | `search_code`, `read_file` (path guard `safeResolve`), tool dispatch, `repoRoot()` |
+| `src/tools.ts` | `search_code`, `read_file` (path guards `safeResolve` and `safeResolveReal`), tool dispatch, `repoRoot()` |
+| `src/repos.ts` | `parseLocation`, `repoPolicyFromEnv`, `RepoRegistry`: local folders, defensive GitHub clones, the clone cache |
 | `src/docs.ts` | Markdown chunking and BM25 ranking for `search_docs` |
 | `src/agent.ts`, `src/index.ts` | The Ask agent loop (streaming, abort, tool callbacks) and its CLI |
 | `src/tool-provider.ts` | `localToolProvider`, `mcpToolProvider`, `toolProviderFromEnv` |
@@ -91,7 +96,7 @@ Key design points:
 | `src/review.ts`, `src/review-cli*.ts` | The review agent (Agent SDK options, sanitized env, budget) and its CLI |
 | `src/web-app.ts`, `src/web-server.ts` | Express API: SSE routes, guards, sign-in gate, `DraftStore`; the server entry point |
 | `test/` | `node:test` suites; `test/fixtures/fake-github.ts` is an in-memory GitHub |
-| `web/` | The Angular app: `ask/`, `review/`, `trace/`, `api.ts`, `sse.ts`, `markdown.pipe.ts`, `models.ts` |
+| `web/` | The Angular app: `ask/`, `repo-picker/`, `review/`, `trace/`, `api.ts`, `sse.ts`, `markdown.pipe.ts`, `models.ts` |
 | `scripts/demo-server.ts` | The scripted-model demo (real repo tools, fake GitHub, sample PR `acme/widgets#7`) |
 | `scripts/md_to_pdf.py` | Builds the design-doc PDFs from Markdown, with drawn diagrams (needs `reportlab`) |
 | `infra/` | `registry.bicep`, `main.bicep` (demo), `private.bicep` (private app) |
@@ -116,7 +121,9 @@ Every input is validated with zod. Tool failures return text starting with `Erro
 
 These are the security properties the project is built around. Don't weaken them, and flag any change that touches them. CI tests the starred ones.
 
-- Every file path from a user or the model goes through `safeResolve()`. Nothing reads outside the repo root.
+- Every file path from a user or the model goes through `safeResolve()`. Nothing reads outside the repo root. `read_file` also checks the real path (`safeResolveReal`), so symlinks can't escape.
+- The repo root is chosen by the person through `/api/repo` (or `--repo`), never by the model. Tools never take a root.
+- GitHub repos are cloned defensively: `execFile` with no shell, https only, no symlinks, no hooks, no user or system git config, a stripped environment, and the token only as a header. See `src/repos.ts`.
 - Every tool except `post_review` is read-only and keeps `readOnlyHint`.
 - `post_review` posts only a single COMMENT review. It's off by default and needs both `GITHUB_TOKEN` and `GITHUB_ALLOW_POST=true`.
 - The review agent never gets a write tool: no built-in tools, `dontAsk` mode, no local settings, a strict MCP config, and a sanitized environment (`agentEnv()`).
@@ -149,6 +156,10 @@ Locally, settings come from `.env` (copy `.env.example`). Values in `.env` overr
 | `WEB_PORT` | 3334 | Web API port |
 | `WEB_HOST` / `PUBLIC_HOSTS` / `ALLOWED_GITHUB_USERS` | loopback / — / — | Hosting only; set by `infra/private.bicep` |
 | `DEMO_HOST` / `DEMO_PORT` | loopback / 3335 | Demo server; set in the image |
+| `REPO_ALLOWED_ROOTS` | — | Folders local paths must be inside. Unset locally: any folder. Hosted: local folders are off unless set. Demo: always off |
+| `REPO_ALLOW_GITHUB` | true | `false` stops opening GitHub repos |
+| `REPO_MAX_MB` / `REPO_CACHE_MAX_MB` | 500 / 2000 local, 200 / 1000 hosted, 50 / 500 demo | Largest repo, and the clone cache's disk cap |
+| `REPO_CACHE_DIR` | temp folder | Where clones live; `/tmp/codebase-qa-repos` in the image |
 
 ## 9. Everyday commands (PowerShell, from the repo root)
 
@@ -156,10 +167,10 @@ Locally, settings come from `.env` (copy `.env.example`). Values in `.env` overr
 |---|---|
 | Install | `npm install`, then `npm run web:install` |
 | Typecheck the backend | `npm run typecheck` |
-| Backend tests (67) | `npm test`; one file: `npx tsx --test test/tools.test.ts` |
-| Web tests (13) | `npm run web:test` |
+| Backend tests (86; 1 skips on Windows) | `npm test`; one file: `npx tsx --test test/tools.test.ts` |
+| Web tests (15) | `npm run web:test` |
 | Build the UI | `npm run web:build` |
-| Ask | `npm run ask -- "question"` |
+| Ask | `npm run ask -- "question"`; another codebase: `npm run ask -- --repo <folder or owner/repo> "question"` |
 | Review a PR | `npm run review -- owner/repo#123`; add `--post` to publish, `--out review.md` to save |
 | MCP server | `npm run serve` (port 3333); connect Claude Code with `claude mcp add --transport http codebase-qa http://127.0.0.1:3333/mcp` |
 | Web app | `npm run web` (http://localhost:3334); dev UI with live reload: `npm run web:dev` |
@@ -202,6 +213,8 @@ All of them are defined in `infra/*.bicep`.
 | Key Vault secrets | `anthropic-api-key`, `github-token`, `github-oauth-secret` |
 | GitHub OAuth app | "Codebase Q&A (private)", used for the private app's sign-in |
 
+**Opening repos on Azure.** The image includes `git`. Both apps open public GitHub repos; the private app also opens private ones its `GITHUB_TOKEN` can read. Clones live on the replica's ephemeral storage, which is 1 GiB for the demo (0.25 vCPU) and 2 GiB for the private app (0.5 vCPU). The default cache caps leave room, and a restart empties the cache.
+
 **Cost:** about $5 a month, mostly the registry. Both apps scale to zero, so the first visit after an idle period waits a few seconds.
 
 **Lessons from the first deploy** (details in [azure_design.md](azure_design.md), section 7):
@@ -240,13 +253,13 @@ All of them are defined in `infra/*.bicep`.
 
 ## 12. Known limitations and roadmap
 
-- **One repository on Azure.** The private app answers only about the source built into its image. Next: clone a chosen repository on demand.
-- **One replica.** Drafts and the run limit live in memory. A shared store would allow scaling out.
+- **The reviewer uses the server's own repo for context.** Ask can open any codebase, but the PR reviewer's `search_code`/`read_file` still read the built-in one. Next: open the PR's repository at its head commit.
+- **The demo's GitHub rate limit.** Opening a repository makes two unauthenticated GitHub API calls, and GitHub allows 60 an hour per IP.
+- **One replica.** Drafts, the run limit, repo ids and the clone cache live in memory or on the replica's disk. A shared store would allow scaling out.
 - **Large PRs.** The reviewer reads the whole diff page by page. Very large PRs can hit the spend cap; raise `REVIEW_MAX_BUDGET_USD` for those.
 - **Roadmap:**
   - an evaluation suite for answer grounding and review quality, run in CI;
   - a hosted MCP endpoint behind a bearer token;
-  - multi-repo support;
   - Azure DevOps pull requests behind the same interface as GitHub;
   - tracing with OpenTelemetry.
 

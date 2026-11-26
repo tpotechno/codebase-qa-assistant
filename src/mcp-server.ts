@@ -187,6 +187,12 @@ export interface HttpServerOptions extends McpServerOptions {
   port?: number;      // 0 = pick a free port (used by tests)
   host?: string;      // default 127.0.0.1 (local only)
   token?: string;     // if set, clients must send "Authorization: Bearer <token>"
+  /**
+   * Look up the root for a repository the person chose (see repos.ts). When set, the
+   * server also answers at POST /mcp/<id>, with the repo tools confined to that root. The
+   * id is issued by the server's own registry; neither the client nor the model picks a path.
+   */
+  rootFor?: (id: string) => string | undefined;
 }
 
 /**
@@ -204,8 +210,9 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<{ server
     res.json({ ok: true, name: SERVER_NAME, version: SERVER_VERSION });
   });
 
-  app.post("/mcp", bearerAuth(opts.token), async (req, res) => {
-    const server = createMcpServer(opts.root, { github, allowPost: opts.allowPost });
+  /** Serve one stateless MCP request with the repo tools confined to `root`. */
+  const handle = async (root: string, req: Request, res: Response) => {
+    const server = createMcpServer(root, { github, allowPost: opts.allowPost });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -222,7 +229,24 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<{ server
         res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: (e as Error).message }, id: null });
       }
     }
-  });
+  };
+
+  // The server's own repository.
+  app.post("/mcp", bearerAuth(opts.token), (req, res) => handle(opts.root, req, res));
+
+  // A repository chosen by the person, by registry id. Auth runs first, so an unauthorized
+  // caller can't probe which ids exist.
+  if (opts.rootFor) {
+    const rootFor = opts.rootFor;
+    app.post("/mcp/:repoId", bearerAuth(opts.token), (req, res) => {
+      const root = rootFor(String(req.params.repoId));
+      if (!root) {
+        res.status(404).json({ jsonrpc: "2.0", error: { code: -32002, message: "Unknown or expired repository. Choose the codebase again." }, id: null });
+        return;
+      }
+      return handle(root, req, res);
+    });
+  }
 
   // Stateless server: no server-initiated streams or sessions to resume or delete.
   const notAllowed = (_req: Request, res: Response) => {
@@ -230,6 +254,8 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<{ server
   };
   app.get("/mcp", notAllowed);
   app.delete("/mcp", notAllowed);
+  app.get("/mcp/:repoId", notAllowed);
+  app.delete("/mcp/:repoId", notAllowed);
 
   return new Promise((resolve, reject) => {
     const server = app.listen(opts.port ?? 3333, host, () => {

@@ -1,5 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
 import { fileURLToPath } from "node:url";
@@ -58,6 +60,27 @@ test("invalid arguments are rejected by schema validation", async () => {
 test("requests without the bearer token are rejected", async () => {
   await assert.rejects(mcpToolProvider(url));
   await assert.rejects(mcpToolProvider(url, "wrong-token"));
+});
+
+test("/mcp/<id> serves a chosen repository's root, with the same auth; unknown ids are refused", async (t) => {
+  // A second, tiny "repository" the registry would have resolved.
+  const other = await fs.mkdtemp(path.join(os.tmpdir(), "cqa-mcp-other-"));
+  t.after(() => fs.rm(other, { recursive: true, force: true }));
+  await fs.writeFile(path.join(other, "hello.ts"), "export const greeting = 'from the other repo';\n");
+  const id = "6f1d2c3b-4a59-4e8d-9c7b-1a2b3c4d5e6f";
+  const s = await startHttpServer({ root, port: 0, token: TOKEN, rootFor: (x) => (x === id ? other : undefined) });
+  t.after(() => new Promise((r) => s.server.close(r)));
+
+  const chosen = await mcpToolProvider(`${s.url}/${id}`, TOKEN);
+  t.after(() => chosen.close());
+  const hit = await chosen.callTool("search_code", { query: "from the other repo" });
+  assert.match(hit.content, /^1 match\(es\)[\s\S]*hello\.ts:1/);
+  // Still confined: the chosen root, not the server's own repo, and no escaping it.
+  assert.match((await chosen.callTool("read_file", { path: "src/mcp-server.ts" })).content, /^Error: could not read/);
+  assert.match((await chosen.callTool("read_file", { path: "../x" })).content, /outside the repository root/);
+
+  await assert.rejects(mcpToolProvider(`${s.url}/${id}`)); // no token
+  await assert.rejects(mcpToolProvider(`${s.url}/00000000-0000-4000-8000-000000000000`, TOKEN));
 });
 
 test("health endpoint responds without auth", async () => {

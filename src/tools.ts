@@ -38,6 +38,33 @@ export function safeResolve(root: string, relPath: string): string {
   return resolved;
 }
 
+/**
+ * True when `target` is `root` itself or somewhere below it. Both must already be absolute.
+ * Shared by the real-path check below and the repo allowlist in repos.ts.
+ */
+export function isInside(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+/**
+ * safeResolve, then the same containment check on the *real* path, with symlinks resolved.
+ * The lexical check alone can be fooled by a symlink inside the repo that points outside
+ * it (e.g. `notes.txt -> /etc/passwd`). That matters once the repo can be any folder or a
+ * clone of an untrusted GitHub repo. The root is real-pathed too, so a repo that is itself
+ * reached through a symlink or junction still works.
+ */
+export async function safeResolveReal(root: string, relPath: string): Promise<string> {
+  const lexical = safeResolve(root, relPath);
+  // A missing file has no real path; let the caller's read report "could not read".
+  const real = await fs.realpath(lexical).catch(() => lexical);
+  const realRoot = await fs.realpath(root).catch(() => root);
+  if (!isInside(realRoot, real)) {
+    throw new Error(`Path "${relPath}" is outside the repository root.`);
+  }
+  return real;
+}
+
 const toPosix = (p: string) => p.split(path.sep).join("/");
 
 async function* walk(dir: string): AsyncGenerator<string> {
@@ -101,7 +128,8 @@ export async function readFile(input: ReadInput, root = repoRoot()): Promise<str
   if (!input.path) return "Error: path is required.";
   let full: string;
   try {
-    full = safeResolve(root, input.path);
+    // Real-path check: refuses symlinks that lead out of the repo, not just "../" paths.
+    full = await safeResolveReal(root, input.path);
   } catch (e) {
     return `Error: ${(e as Error).message}`;
   }
@@ -127,7 +155,8 @@ export async function readFile(input: ReadInput, root = repoRoot()): Promise<str
     end < lines.length
       ? `\n\n[showing lines ${start}-${end} of ${lines.length}; request another range with start/end]`
       : "";
-  return `${toPosix(path.relative(root, full))} (lines ${start}-${end} of ${lines.length})\n${body}${more}`;
+  // Report the path as the model asked for it (relative to the root it knows about).
+  return `${toPosix(path.relative(root, safeResolve(root, input.path)))} (lines ${start}-${end} of ${lines.length})\n${body}${more}`;
 }
 
 // ---------- Tool definitions sent to Claude ----------

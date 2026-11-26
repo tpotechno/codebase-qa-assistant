@@ -203,7 +203,7 @@ export class GitHubClient {
         /* non-JSON error body */
       }
       const hint =
-        res.status === 404 ? " (check the PR exists; private repos need GITHUB_TOKEN)"
+        res.status === 404 ? " (check it exists; private repos need GITHUB_TOKEN)"
         : res.status === 401 ? " (GITHUB_TOKEN is invalid or expired)"
         : res.status === 403 ? " (rate limited or token lacks permission; set GITHUB_TOKEN)"
         : "";
@@ -304,6 +304,45 @@ export class GitHubClient {
     );
     return { url: review.html_url, inlineCount: inline.length, foldedCount: folded.length };
   }
+
+  /**
+   * Repository facts needed before cloning one for Ask (see repos.ts). `size` is GitHub's
+   * figure in KB, which lets an oversized repo be refused before anything is downloaded.
+   * Read-only.
+   */
+  async getRepo(owner: string, repo: string): Promise<RepoSummary> {
+    // Only the fields used here; GitHub returns many more.
+    const r = await this.request<{
+      full_name?: string;
+      default_branch?: string;
+      size?: number;
+      private?: boolean;
+      html_url?: string;
+    }>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+    return {
+      fullName: String(r.full_name ?? `${owner}/${repo}`),
+      defaultBranch: String(r.default_branch ?? "main"),
+      sizeKb: Number(r.size ?? 0),
+      private: Boolean(r.private),
+      url: String(r.html_url ?? `https://github.com/${owner}/${repo}`),
+    };
+  }
+
+  /** The commit a branch or tag currently points at. Read-only. */
+  async getCommitSha(owner: string, repo: string, ref: string): Promise<string> {
+    const c = await this.request<{ sha: string }>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(ref)}`,
+    );
+    return c.sha;
+  }
+}
+
+export interface RepoSummary {
+  fullName: string;
+  defaultBranch: string;
+  sizeKb: number;
+  private: boolean;
+  url: string;
 }
 
 // ---------- LLM-facing formatting ----------

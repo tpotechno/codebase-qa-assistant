@@ -8,11 +8,13 @@ import { runAgent } from "./agent.ts";
 import { StaleHeadError, formatPrRef, parsePrRef, type GitHubClient, type PrRef, type PostReviewResult } from "./github.ts";
 import { formatReviewMarkdown, inlineCommentBody, runReview, type Review, type ReviewOptions } from "./review.ts";
 import type { ToolProvider } from "./tool-provider.ts";
+import { RepoError, type RepoRegistry } from "./repos.ts";
 
 /**
  * HTTP API behind the Angular UI.
  *
  *   GET  /api/config        what the UI needs to render (repo, model, whether posting is possible)
+ *   POST /api/repo          opens a codebase to ask about (local folder or GitHub repo)
  *   POST /api/ask           streams an answer as Server-Sent Events
  *   POST /api/review        streams a PR review as Server-Sent Events
  *   POST /api/review/post   publishes a draft this server produced, by id, at most once
@@ -29,8 +31,13 @@ export interface WebAppDeps {
   /** True when a GitHub token is configured, so /api/review/post can work. */
   canPost: boolean;
   maxBudgetUsd: number;
-  /** Tool source for /api/ask; the caller owns its lifecycle. */
-  openTools: () => Promise<ToolProvider>;
+  /**
+   * Tool source for /api/ask; the caller owns its lifecycle. `repoId` is a chosen repo's id
+   * from `repos` (already checked to exist); omitted means the server's own repository.
+   */
+  openTools: (repoId?: string) => Promise<ToolProvider>;
+  /** Lets the person choose which codebase to ask about. Unset: only the built-in repo. */
+  repos?: RepoRegistry;
   /** MCP server the review agent connects to. */
   mcp: { url: string; token?: string };
   /** Hosts (host:port) the server answers to. Requests with any other Host are rejected. */
@@ -306,7 +313,9 @@ export class DraftStore {
   }
 }
 
-const askBody = z.object({ question: z.string().trim().min(1).max(4_000) });
+// repoId: from /api/repo; omitted means the server's own repository.
+const askBody = z.object({ question: z.string().trim().min(1).max(4_000), repoId: z.string().uuid().optional() });
+const repoBody = z.object({ location: z.string().trim().min(1).max(500) });
 const reviewBody = z.object({ pr: z.string().trim().min(1).max(300) });
 const postBody = z.object({ draftId: z.string().uuid() });
 
@@ -349,19 +358,44 @@ export function createWebApp(deps: WebAppDeps): Express {
       maxBudgetUsd: deps.maxBudgetUsd,
       demo: Boolean(deps.demo),
       user: (res.locals.user as string | undefined) ?? null,
+      // What the codebase field may accept; both false means the UI hides it.
+      repoChoice: deps.repos?.choice ?? { local: false, github: false },
     });
+  });
+
+  // Open a codebase: validates the location against the server's policy and, for GitHub,
+  // downloads it (which can take a while). The answer's id is sent with each question.
+  app.post("/api/repo", async (req, res) => {
+    if (!deps.repos) return res.status(403).json({ error: "This server only answers about its own repository." });
+    const parsed = repoBody.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+    try {
+      res.json(await deps.repos.resolve(parsed.data.location));
+    } catch (e) {
+      // RepoErrors are written for the person; anything else is unexpected, so log it.
+      if (e instanceof RepoError) return res.status(e.status).json({ error: e.message });
+      console.error(`Opening a repository failed: ${(e as Error).message}`);
+      res.status(500).json({ error: "Could not open that codebase." });
+    }
   });
 
   app.post("/api/ask", async (req, res) => {
     const parsed = askBody.safeParse(req.body);
     if (!parsed.success) return badRequest(res, parsed.error);
+    // Check the chosen repo before opening the stream, so an expired id is a plain 404.
+    const { repoId } = parsed.data;
+    const chosen = repoId ? deps.repos?.lookup(repoId) : undefined;
+    if (repoId && !chosen) {
+      return res.status(404).json({ error: "That codebase is no longer open. Load it again." });
+    }
     if (!claimRun(res)) return;
 
     const { send, fail, end, abort } = openStream(req, res, runTimeoutMs);
     let tools: ToolProvider | undefined;
     try {
-      tools = await deps.openTools();
+      tools = await deps.openTools(repoId);
       const result = await untilAborted(runAgent(parsed.data.question, {
+        repoLabel: (chosen?.info ?? deps.repos?.defaultRepo())?.label,
         model: deps.model,
         tools,
         client: deps.anthropic,

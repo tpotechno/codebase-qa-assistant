@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { AppConfig, PostResult } from './models';
+import { AppConfig, PostResult, RepoInfo } from './models';
 import { SseEvent, SseParser } from './sse';
 
 async function errorFrom(res: Response): Promise<Error> {
@@ -12,6 +12,21 @@ async function errorFrom(res: Response): Promise<Error> {
 export class Api {
   async config(): Promise<AppConfig> {
     const res = await fetch('/api/config');
+    if (!res.ok) throw await errorFrom(res);
+    return res.json();
+  }
+
+  /**
+   * Open a codebase to ask about: a folder path or a GitHub repo. A GitHub repo is downloaded
+   * first, which can take a while, so it can be cancelled (the server keeps the download).
+   */
+  async openRepo(location: string, signal: AbortSignal): Promise<RepoInfo> {
+    const res = await fetch('/api/repo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location }),
+      signal,
+    });
     if (!res.ok) throw await errorFrom(res);
     return res.json();
   }

@@ -8,6 +8,7 @@ import { startHttpServer } from "./mcp-server.ts";
 import { GitHubClient } from "./github.ts";
 import { mcpToolProvider } from "./tool-provider.ts";
 import { repoRoot } from "./tools.ts";
+import { RepoRegistry, repoPolicyFromEnv } from "./repos.ts";
 import { parseBudget } from "./review.ts";
 import { createWebApp, parseList, parsePort } from "./web-app.ts";
 
@@ -51,10 +52,22 @@ const githubToken = process.env.GITHUB_TOKEN || undefined;
 const github = new GitHubClient({ token: githubToken });
 const model = process.env.CLAUDE_MODEL ?? "claude-sonnet-5-5";
 
+// Which codebases Ask may open. Hosted (signed-in, allowlisted users), local folders are off
+// unless REPO_ALLOWED_ROOTS names some; GitHub repos are allowed, private ones via the token.
+let repoPolicy;
+try {
+  repoPolicy = repoPolicyFromEnv(isLoopback ? "local" : "hosted");
+} catch (e) {
+  console.error((e as Error).message);
+  process.exit(1);
+}
+const repos = new RepoRegistry({ defaultRoot: root, policy: repoPolicy, github, cloneToken: githubToken });
+
 // A private MCP server for both agents: ask gets all repo and PR tools, review gets its
 // read-only subset. Posting goes through /api/review/post, never through the agent.
+// /mcp serves the built-in repo; /mcp/<id> serves one the person opened.
 const mcpToken = randomBytes(24).toString("hex");
-const mcp = await startHttpServer({ root, port: 0, token: mcpToken, github });
+const mcp = await startHttpServer({ root, port: 0, token: mcpToken, github, rootFor: (id) => repos.rootFor(id) });
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = createWebApp({
@@ -63,7 +76,8 @@ const app = createWebApp({
   github,
   canPost: Boolean(githubToken),
   maxBudgetUsd: maxBudgetUsd!,
-  openTools: () => mcpToolProvider(mcp.url, mcpToken),
+  openTools: (repoId) => mcpToolProvider(repoId ? `${mcp.url}/${repoId}` : mcp.url, mcpToken),
+  repos,
   mcp: { url: mcp.url, token: mcpToken },
   allowedHosts: [`localhost:${port!}`, `127.0.0.1:${port!}`, ...publicHosts],
   allowedUsers: allowedUsers.length ? allowedUsers : undefined,
@@ -75,5 +89,7 @@ app.listen(port!, bindHost, () => {
   if (publicHosts.length) console.error(`Also answering to: ${publicHosts.join(", ")}`);
   if (allowedUsers.length) console.error(`Signed-in GitHub users allowed: ${allowedUsers.join(", ")}`);
   console.error(`Repo: ${root}`);
+  const { local, github: gh } = repos.choice;
+  console.error(`Other codebases: ${[local && "local folders", gh && "GitHub repos"].filter(Boolean).join(" and ") || "off"}`);
   console.error(`GitHub: ${githubToken ? "token set (posting available)" : "no token (public PRs only, no posting)"}`);
 });

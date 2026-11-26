@@ -2,7 +2,7 @@
 
 An agentic assistant built on the Claude API that answers questions about a codebase and reviews GitHub pull requests, grounded in the actual code and docs. Its tools are served by a custom **MCP server** over Streamable HTTP, so the same tools work for this app, Claude Code, and any other MCP client. It runs on **Azure Container Apps**, deployed from GitHub Actions on every merge.
 
-**[▶ Try the live demo](https://codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io)**. It runs a scripted model over this repo's own source, so no sign-up or API key is needed. Try **Ask a question**, then **Review a pull request** on the sample PR.
+**[▶ Try the live demo](https://codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io)**. It runs a scripted model over this repo's own source, so no sign-up or API key is needed. Try **Ask a question**, open any small public GitHub repo in the **Codebase** field to watch the tools run on it, then **Review a pull request** on the sample PR.
 
 **Stack:** TypeScript / Node, Claude API (`@anthropic-ai/sdk`), Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`), Model Context Protocol (`@modelcontextprotocol/sdk`), GitHub REST API, Express, Angular 21 (signals, zoneless). **Cloud:** Azure Container Apps, Container Registry, Key Vault, Bicep, GitHub Actions with OIDC.
 
@@ -17,6 +17,7 @@ An agentic assistant built on the Claude API that answers questions about a code
 - **Phase 5 — complete.** Hosting on Azure. Every merge deploys from GitHub Actions to Azure Container Apps, with infrastructure as code (Bicep) and keyless OIDC sign-in:
   - a [public, scripted demo](https://codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io);
   - the real assistant, private behind GitHub sign-in and an allowlist, with its keys in Key Vault.
+- **Phase 6 — complete.** Ask about any codebase: enter a folder path or a GitHub repository (`owner/repo`, `owner/repo@branch` or a github.com URL) and the server opens it, shallow-cloning GitHub repos into a size-capped cache. The tools are unchanged and stay confined to the chosen repo.
 
 ### Tools
 
@@ -38,6 +39,13 @@ npm install
 Copy-Item .env.example .env
 # edit .env: set ANTHROPIC_API_KEY and REPO_PATH (the repo you want to ask about)
 npm run ask -- "Where is the HTTP interceptor configured, and what does it add to requests?"
+```
+
+To ask about a different codebase without editing `.env`, pass `--repo` with a folder or a GitHub repository:
+
+```powershell
+npm run ask -- --repo C:\source\repos\other-app "Where is configuration loaded?"
+npm run ask -- --repo octocat/Hello-World "What is this?"
 ```
 
 Without `MCP_SERVER_URL` set, tools run in-process (Phase 1 mode). Tool calls print to stderr as they happen (`↳ search_code {...}`), followed by the answer and a token summary.
@@ -95,12 +103,13 @@ npm run web           # http://localhost:3334
 
 Uses the same `.env` as the command line. Two modes:
 
+- **Choose a codebase.** The **Codebase** field above the question opens another one: a folder path (e.g. `C:\source\repos\my-app`) or a GitHub repository (`owner/repo`, `owner/repo@branch` or a github.com URL). A GitHub repository is downloaded first, a shallow clone kept in a cache, so the first question about it waits a few seconds. **Back to** returns to `REPO_PATH`.
 - **Ask a question.** The answer streams in as it's written. The Steps panel shows each tool call as it happens (what was searched, which lines were read) with the result one click away. Short notes Claude writes before calling a tool appear there too, so the answer itself stays clean.
 - **Review a pull request.** Enter `owner/repo#123` or a PR link. You get the verdict, the summary, and comments grouped by file with their line numbers. **Post to GitHub** publishes exactly the draft on screen, as a comment: the server keeps each review it generates and posts it by id, at most once, and refuses if the PR has new commits since the review started.
 
 ![Reviewing a pull request: verdict, summary, and line comments grouped by file](docs/screenshots/review.png)
 
-**Try it without an API key:** `npm run web:demo` serves the UI on port 3335 with a scripted stand-in for Claude. The repo tools run for real against this repository; the review uses a sample PR (`acme/widgets#7`) from an in-memory GitHub, and nothing is sent anywhere.
+**Try it without an API key:** `npm run web:demo` serves the UI on port 3335 with a scripted stand-in for Claude. The repo tools run for real against this repository, or against a small public GitHub repo you open (the demo then runs a short scripted tour and says the answer text is a template); the review uses a sample PR (`acme/widgets#7`) from an in-memory GitHub, and nothing is sent anywhere.
 
 **Hosted demo:** the same scripted demo is live at [codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io](https://codebase-qa-demo.ambitiousdesert-11a1c74b.westus2.azurecontainerapps.io). To run the container locally: `docker build -t codebase-qa-demo . && docker run -p 3335:3335 codebase-qa-demo`.
 
@@ -111,6 +120,12 @@ Uses the same `.env` as the command line. Two modes:
 | Variable | Default | Purpose |
 |---|---|---|
 | `WEB_PORT` | `3334` | Port for `npm run web` |
+| `REPO_ALLOWED_ROOTS` | — | Folders that local paths must be inside (comma-separated). Unset locally: any folder. Hosted: local folders are off unless set |
+| `REPO_ALLOW_GITHUB` | `true` | Set `false` to stop opening GitHub repositories |
+| `REPO_MAX_MB` / `REPO_CACHE_MAX_MB` | 500 / 2000 locally, 200 / 1000 hosted, 50 / 500 demo | Largest repository to open, and the clone cache's disk cap |
+| `REPO_CACHE_DIR` | system temp folder | Where GitHub clones are kept |
+
+**Opening other codebases safely.** You choose the codebase; the model can't. The server turns what you typed into an id and serves that root to the agent, and the tools never accept a root. GitHub repositories are untrusted, so they're cloned shallow over https only, with symlinks checked out as plain files, no hooks, no submodules, and no user or system git config. git also gets a stripped environment with no API keys, and the token is passed as a header, never in a URL. Size is checked before and after download. `read_file` also checks real paths, so a symlink can't lead outside the repository.
 
 ## Running on Azure
 
@@ -197,8 +212,9 @@ Design docs:
 - **Phase 3, PR review:** [docs/pr_review_design.md](docs/pr_review_design.md) ([PDF](docs/pr_review_design.pdf))
 - **Phase 4, web UI:** [docs/web_ui_design.md](docs/web_ui_design.md) ([PDF](docs/web_ui_design.pdf))
 - **Phase 5, Azure deployment:** [docs/azure_design.md](docs/azure_design.md) ([PDF](docs/azure_design.pdf)); setup guide [docs/azure_deployment.md](docs/azure_deployment.md)
+- **Phase 6, choosing a codebase:** [docs/repo_selection_design.md](docs/repo_selection_design.md) ([PDF](docs/repo_selection_design.pdf)); implementation plan [docs/repo_selection_plan.md](docs/repo_selection_plan.md)
 
-The Phase 1 and 3–5 PDFs are generated from their Markdown, e.g. `python scripts/md_to_pdf.py docs/web_ui_design.md docs/web_ui_design.pdf` (requires `pip install reportlab`).
+The Phase 1 and 3–6 PDFs are generated from their Markdown, e.g. `python scripts/md_to_pdf.py docs/web_ui_design.md docs/web_ui_design.pdf` (requires `pip install reportlab`).
 
 **Design notes**
 
@@ -215,7 +231,7 @@ The Phase 1 and 3–5 PDFs are generated from their Markdown, e.g. `python scrip
 
 - **Evaluation suite.** Answer grounding and review quality, scored on a labeled set and run in CI.
 - **Hosted MCP endpoint.** The MCP server as its own Container App behind a bearer token, usable from any MCP client.
-- **More than one repository.** The private app clones a chosen repo, instead of asking only about the source built into its image.
+- **Review with the PR's own code.** The reviewer still looks up surrounding code in the server's own repository; it could open the PR's repository at its head commit with the same registry.
 - **Azure DevOps pull requests**, behind the same interface as GitHub.
 - **Tracing** of agent runs (OpenTelemetry).
 

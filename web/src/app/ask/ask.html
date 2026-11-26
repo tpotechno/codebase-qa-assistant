@@ -1,5 +1,7 @@
+<app-repo-picker [config]="config()" [disabled]="running()" [(repo)]="repo" />
+
 <form class="composer" (ngSubmit)="submit()">
-  <label for="question">Ask about {{ config()?.repoName ?? 'this codebase' }}</label>
+  <label for="question">Ask about {{ repoName() }}</label>
   <textarea
     id="question"
     name="question"

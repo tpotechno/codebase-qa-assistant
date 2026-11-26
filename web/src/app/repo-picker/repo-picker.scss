@@ -1,0 +1,29 @@
+.picker {
+  max-width: 48rem;
+  margin-bottom: 1.5rem;
+
+  label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.45rem;
+  }
+
+  .row {
+    display: flex;
+    gap: 0.6rem;
+  }
+
+  input {
+    font-family: var(--mono);
+    font-size: 0.9rem;
+  }
+
+  .hint {
+    margin: 0.45rem 0 0;
+    overflow-wrap: anywhere;
+  }
+
+  .error {
+    margin-top: 0.45rem;
+  }
+}

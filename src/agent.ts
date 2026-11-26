@@ -24,6 +24,11 @@ export interface AgentOptions {
   onText?: (delta: string, turn: number) => void;
   /** Abort the run (e.g. the browser disconnected). Stops in-flight API calls too. */
   signal?: AbortSignal;
+  /**
+   * Which codebase this is (e.g. "octocat/Hello-World@master"), told to the model so it can
+   * refer to it by name. The tools are already confined to it; this is only context.
+   */
+  repoLabel?: string;
   /** Where tools come from (in-process or an MCP server). Defaults to local. */
   tools?: ToolProvider;
   /** Injectable for tests. */
@@ -63,7 +68,7 @@ export async function runAgent(question: string, opts: AgentOptions = {}): Promi
     const params: Anthropic.MessageCreateParamsNonStreaming = {
       model,
       max_tokens: opts.maxTokens ?? 2048,
-      system: SYSTEM_PROMPT,
+      system: opts.repoLabel ? `${SYSTEM_PROMPT}\n\nThe codebase you are answering about: ${opts.repoLabel}` : SYSTEM_PROMPT,
       tools,
       messages,
     };

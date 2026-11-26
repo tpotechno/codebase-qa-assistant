@@ -1,6 +1,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -8,6 +10,7 @@ import { DraftStore, createWebApp, parseList, parsePort } from "../src/web-app.t
 import { startHttpServer } from "../src/mcp-server.ts";
 import { GitHubClient } from "../src/github.ts";
 import { mcpToolProvider } from "../src/tool-provider.ts";
+import { RepoRegistry, repoPolicyFromEnv } from "../src/repos.ts";
 import { HEAD_SHA, fakeGitHub, type FakeGitHub } from "./fixtures/fake-github.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -371,4 +374,53 @@ test("hosted mode admits only allowlisted GitHub logins signed in by the platfor
 test("parseList trims and drops blanks", () => {
   assert.deepEqual(parseList(" a, b ,,c "), ["a", "b", "c"]);
   assert.deepEqual(parseList(undefined), []);
+});
+
+test("POST /api/repo opens a folder, and /api/ask with its id answers from that folder", async (t) => {
+  // A small second codebase, plus a registry and an MCP server that serves it by id.
+  const other = await fs.mkdtemp(path.join(os.tmpdir(), "cqa-web-other-"));
+  t.after(() => fs.rm(other, { recursive: true, force: true }));
+  await fs.writeFile(path.join(other, "hello.ts"), "export const greeting = 'from the other repo';\n");
+  const repos = new RepoRegistry({
+    defaultRoot: root,
+    policy: { ...repoPolicyFromEnv("local", {}), cacheDir: path.join(other, ".cache") },
+    github: new GitHubClient({ fetch: gh.fetch }),
+  });
+  const m = await startHttpServer({ root, port: 0, rootFor: (id) => repos.rootFor(id) });
+  t.after(() => new Promise((r) => m.server.close(r)));
+  const app = await startApp({ repos, openTools: (id?: string) => mcpToolProvider(id ? `${m.url}/${id}` : m.url) });
+  t.after(() => new Promise((r) => app.server.close(r)));
+  const post = (p: string, body: unknown, headers: Record<string, string> = {}) =>
+    fetch(app.base + p, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+
+  const cfg = await (await fetch(`${app.base}/api/config`)).json();
+  assert.deepEqual(cfg.repoChoice, { local: true, github: true });
+
+  const opened = await post("/api/repo", { location: other });
+  assert.equal(opened.status, 200);
+  const repo = await opened.json();
+  assert.equal(repo.kind, "local");
+  assert.equal(repo.name, path.basename(other));
+
+  anthropicTurns.push(
+    { stop_reason: "tool_use", usage, content: [{ type: "tool_use", id: "s1", name: "search_code", input: { query: "greeting" } }] },
+    { stop_reason: "end_turn", usage, content: [{ type: "text", text: "It greets." }] },
+  );
+  const res = await post("/api/ask", { question: "What does it say?", repoId: repo.id });
+  const text = await res.text();
+  assert.match(text, /hello\.ts:1/, "the tools searched the chosen folder");
+  assert.match(text, /"answer":"It greets\."/);
+
+  // Refusals: bad input, a missing folder, an unknown id, and a cross-site request.
+  assert.equal((await post("/api/repo", { location: "" })).status, 400);
+  assert.equal((await post("/api/repo", { location: "not a location" })).status, 400);
+  assert.equal((await post("/api/repo", { location: path.join(other, "missing") })).status, 404);
+  assert.equal((await post("/api/ask", { question: "hi", repoId: "00000000-0000-4000-8000-000000000000" })).status, 404);
+  assert.equal((await post("/api/repo", { location: other }, { Origin: "https://evil.example" })).status, 403);
+});
+
+test("without a registry, only the built-in repo is offered", async () => {
+  const cfg = await (await fetch(`${base}/api/config`)).json();
+  assert.deepEqual(cfg.repoChoice, { local: false, github: false });
+  assert.equal((await postJson("/api/repo", { location: "acme/widgets" })).status, 403);
 });
