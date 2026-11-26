@@ -8,7 +8,7 @@ Codebase Q&A and PR Review Assistant, Phase 6
 | Repository | github.com/tpotechno/codebase-qa-assistant |
 | Version | 0.7.0 (Phase 6) |
 | Date | November 26, 2026 |
-| Status | In review; 86 server tests (1 skipped on Windows) and 15 Angular tests passing |
+| Status | In review; 106 server tests (1 skipped on Windows) and 25 Angular tests passing |
 
 PDF version: [repo_selection_design.pdf](repo_selection_design.pdf) · Plan: [repo_selection_plan.md](repo_selection_plan.md) · Earlier phases: [mcp_server_design.md](mcp_server_design.md), [web_ui_design.md](web_ui_design.md), [azure_design.md](azure_design.md)
 
@@ -55,8 +55,8 @@ The tools didn't change at all. `search_code`, `read_file` and `search_docs` kee
 | `src/github.ts` | Two read-only calls: `getRepo` (size, default branch, visibility) and `getCommitSha`. |
 | `src/web-app.ts` | `POST /api/repo`. `/api/ask` accepts an optional `repoId`. `/api/config` reports `repoChoice`. |
 | `src/agent.ts` | Optional `repoLabel`, added to the system prompt so answers can name the codebase. |
-| `src/index.ts` | `--repo <location>` for the CLI, with in-process tools confined to the chosen root. |
-| `scripts/demo-server.ts` | Demo-mode registry, plus a stateless scripted model with a generic tour for any repository. |
+| `src/index.ts`, `src/ask-cli-lib.ts` | `--repo <location>` for the CLI (parsed by `parseAskArgs`), with in-process tools confined to the chosen root. |
+| `scripts/demo-server.ts`, `scripts/demo-model.ts` | Demo-mode registry. `demo-model.ts` holds the stateless scripted model and the generic tour for any repository, kept apart so tests can import it. |
 | `web/src/app/repo-picker/` | New component: the Codebase field, Open/Cancel, status line and errors. |
 | `Dockerfile` | Installs `git` and `ca-certificates`, and sets `REPO_CACHE_DIR=/tmp/codebase-qa-repos`. |
 
@@ -153,19 +153,27 @@ These are the invariants this phase touches, checked one by one:
 
 ## 6. Testing
 
-- **`test/repos.test.ts` (new, 14 tests):**
+- **`test/repos.test.ts` (new, 21 tests):**
   - parsing, including option-like branches and Windows paths;
   - the policy for each mode;
   - local folders: missing, a file, outside the allowlist, turned off;
   - id expiry;
   - the exact git arguments and environment, including that the token never appears in arguments;
   - private, oversized and unknown repositories refused before download, and a checkout over the cap deleted;
-  - de-duplicated concurrent downloads, eviction, and adopting clones from an earlier run.
+  - de-duplicated concurrent downloads, eviction, and adopting clones from an earlier run;
+  - failure paths: a failed clone (reported, and its temp folder removed), GitHub rate limits and errors, a branch that moved during the clone, no token where private repos are off, and cleaning up abandoned downloads at startup;
+  - `execGit` with Node standing in for git: stdout, the last stderr line on failure, and the timeout.
   - A fake `git` runner and the in-memory GitHub keep it offline.
 - **`test/tools.test.ts`:** a file symlink and a directory junction that escape the root are both refused. The file symlink test skips on Windows without Developer Mode; CI runs it on Linux.
-- **`test/mcp.test.ts`:** `/mcp/<id>` serves the chosen root, refuses unknown ids, and needs the token.
-- **`test/web-app.test.ts`:** open a folder, then ask with its id and see the tools search that folder. Also bad input, a missing folder, an unknown id, a cross-site request, and the server without a registry.
-- **`repo-picker.spec.ts`:** the placeholder and status helpers.
+- **`test/mcp.test.ts`:** `/mcp/<id>` serves the chosen root, refuses unknown ids, needs the token, and answers only POST.
+- **`test/web-app.test.ts`:** open a folder, then ask with its id and see the tools search that folder. Also bad input, a missing folder, an unknown id, a cross-site request, the server without a registry, and an unexpected failure (a plain 500 with no details).
+- **`test/demo-model.test.ts` (new):** `tourAnswer` filled in from real tool output on a temporary repo (README heading, badge skipped, docs and TODO hits), empty repos, long introductions, the stateless script choice, and the full tour through the real agent loop.
+- **`test/ask-cli.test.ts` (new):** `--repo` anywhere on the line, and its mistakes.
+- **`test/agent.test.ts`:** `repoLabel` in the system prompt, and `localToolProvider(root)`.
+- **`test/github.test.ts`:** `getRepo` and `getCommitSha`, including branch names with slashes.
+- **`repo-picker.spec.ts`:** the helpers, and the component with a fake `Api`: hidden when nothing can be opened, opening and reporting a repo, a refusal, cancelling a download, going back, prefilling without opening, and locking while a question runs.
+- **`ask.spec.ts` (new):** `Ask` sends `repoId` only for a chosen codebase, names it in the label, and switches the demo's suggestion.
+- Two tests were checked by breaking the code on purpose: they fail if `read_file` drops the real-path check, or if `Ask` stops sending `repoId`.
 - **Manual checks:**
   - a real clone of `octocat/Hello-World` on Windows;
   - the demo server opening `octocat/Spoon-Knife` and running the tour;

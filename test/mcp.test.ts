@@ -83,6 +83,15 @@ test("/mcp/<id> serves a chosen repository's root, with the same auth; unknown i
   await assert.rejects(mcpToolProvider(`${s.url}/00000000-0000-4000-8000-000000000000`, TOKEN));
 });
 
+test("/mcp/<id> answers only POST, like /mcp", async (t) => {
+  const s = await startHttpServer({ root, port: 0, rootFor: () => root });
+  t.after(() => new Promise((r) => s.server.close(r)));
+  for (const method of ["GET", "DELETE"]) {
+    const res = await fetch(`${s.url}/6f1d2c3b-4a59-4e8d-9c7b-1a2b3c4d5e6f`, { method });
+    assert.equal(res.status, 405, method);
+  }
+});
+
 test("health endpoint responds without auth", async () => {
   const res = await fetch(url.replace(/\/mcp$/, "/health"));
   assert.equal(res.status, 200);

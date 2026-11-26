@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAgent } from "../src/agent.ts";
+import { localToolProvider } from "../src/tool-provider.ts";
 
 process.env.REPO_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -113,4 +116,29 @@ test("an aborted signal stops the run", async () => {
   const ac = new AbortController();
   ac.abort();
   await assert.rejects(runAgent("q", { client: { messages: { create: async () => ({}) } } as any, signal: ac.signal }), (e: Error) => e.name === "AbortError");
+});
+
+test("repoLabel names the codebase in the system prompt; without it the prompt is unchanged", async () => {
+  const done = () => ({ stop_reason: "end_turn", usage, content: [{ type: "text", text: "ok" }] });
+  const client = fakeClient([done(), done()]);
+  await runAgent("q", { client: client as any, repoLabel: "acme/widgets@main" });
+  await runAgent("q", { client: client as any });
+  const [withLabel, without] = client.requests.map((r) => r.system as string);
+  assert.ok(withLabel.endsWith("\n\nThe codebase you are answering about: acme/widgets@main"));
+  assert.ok(withLabel.startsWith(without));
+  assert.doesNotMatch(without, /The codebase you are answering about/);
+});
+
+test("localToolProvider(root) confines the tools to that root", async () => {
+  const other = await fs.mkdtemp(path.join(os.tmpdir(), "cqa-agent-root-"));
+  try {
+    await fs.writeFile(path.join(other, "only-here.txt"), "marker-in-other-root\n");
+    const tools = localToolProvider(other);
+    assert.match((await tools.callTool("search_code", { query: "marker-in-other-root" })).content, /only-here\.txt:1/);
+    // This repository's files aren't visible from the other root.
+    const r = await tools.callTool("read_file", { path: "src/agent.ts" });
+    assert.equal(r.isError, true);
+  } finally {
+    await fs.rm(other, { recursive: true, force: true });
+  }
 });

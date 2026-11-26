@@ -167,8 +167,8 @@ Locally, settings come from `.env` (copy `.env.example`). Values in `.env` overr
 |---|---|
 | Install | `npm install`, then `npm run web:install` |
 | Typecheck the backend | `npm run typecheck` |
-| Backend tests (86; 1 skips on Windows) | `npm test`; one file: `npx tsx --test test/tools.test.ts` |
-| Web tests (15) | `npm run web:test` |
+| Backend tests (106; 1 skips on Windows) | `npm test`; one file: `npx tsx --test test/tools.test.ts` |
+| Web tests (25) | `npm run web:test` |
 | Build the UI | `npm run web:build` |
 | Ask | `npm run ask -- "question"`; another codebase: `npm run ask -- --repo <folder or owner/repo> "question"` |
 | Review a PR | `npm run review -- owner/repo#123`; add `--post` to publish, `--out review.md` to save |

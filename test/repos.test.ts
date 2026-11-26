@@ -9,6 +9,7 @@ import {
   RepoRegistry,
   parseLocation,
   repoPolicyFromEnv,
+  execGit,
   type GitRunner,
   type RepoPolicy,
 } from "../src/repos.ts";
@@ -250,4 +251,101 @@ test("clones from an earlier run are adopted and reused", async (t) => {
   const again = new RepoRegistry({ defaultRoot: cache, policy: policy(cache), github: gh(), git: git.run });
   assert.ok((await again.resolve("acme/widgets")).id);
   assert.equal(git.clones(), 1);
+});
+
+// ---------- failure paths ----------
+
+/** A GitHub client whose every request answers with this status. */
+const failingGitHub = (status: number) =>
+  new GitHubClient({ fetch: async () => new Response(JSON.stringify({ message: "nope" }), { status }) });
+
+test("GitHub refusals become messages the person can act on", async (t) => {
+  const cache = await tempDir(t, "cqa-cache-");
+  const status = (gh: GitHubClient) =>
+    new RepoRegistry({ defaultRoot: cache, policy: policy(cache), github: gh, git: fakeGit().run })
+      .resolve("acme/widgets")
+      .then(() => 0, (e: RepoError) => e.status);
+  assert.equal(await status(failingGitHub(403)), 429); // rate limit
+  assert.equal(await status(failingGitHub(429)), 429);
+  assert.equal(await status(failingGitHub(500)), 502);
+});
+
+test("a failed clone is reported, and its temporary folder is removed", async (t) => {
+  const cache = await tempDir(t, "cqa-cache-");
+  const git: GitRunner = async (args) => {
+    // Leave a partial checkout behind, as a real failed clone can.
+    const target = args[args.length - 1];
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, "partial"), "x");
+    throw new Error("fatal: Remote branch main not found in upstream origin");
+  };
+  const repos = new RepoRegistry({ defaultRoot: cache, policy: policy(cache), github: gh(), git });
+  await assert.rejects(repos.resolve("acme/widgets"), (e: RepoError) =>
+    e.status === 502 && /Could not download acme\/widgets: fatal: Remote branch main not found/.test(e.message));
+  assert.deepEqual((await fs.readdir(cache)).filter((n) => n.startsWith(".tmp-")), []);
+});
+
+test("the commit actually cloned is reported, even if the branch moved after the API call", async (t) => {
+  const cache = await tempDir(t, "cqa-cache-");
+  const git: GitRunner = async (args) => {
+    if (args.includes("clone")) {
+      await fs.mkdir(args[args.length - 1], { recursive: true });
+      return "";
+    }
+    return `${DEV_SHA}\n`; // rev-parse: main has moved on to a newer commit
+  };
+  const repos = new RepoRegistry({ defaultRoot: cache, policy: policy(cache), github: gh(), git });
+  const info = await repos.resolve("acme/widgets");
+  assert.equal(info.sha, DEV_SHA);
+  assert.match(repos.rootFor(info.id!)!, new RegExp(`__${DEV_SHA.slice(0, 12)}$`));
+});
+
+test("the token is not given to git where private repos are off", async (t) => {
+  const cache = await tempDir(t, "cqa-cache-");
+  const git = fakeGit();
+  const repos = new RepoRegistry({
+    defaultRoot: cache,
+    policy: policy(cache, { allowPrivate: false }),
+    github: gh(),
+    cloneToken: "ghp_secret",
+    git: git.run,
+  });
+  await repos.resolve("acme/widgets");
+  const { env } = git.calls[0];
+  assert.equal(env.GIT_CONFIG_COUNT, undefined);
+  assert.ok(!JSON.stringify(env).includes(Buffer.from("x-access-token:ghp_secret").toString("base64")));
+});
+
+test("startup removes abandoned downloads but keeps recent ones and anything it didn't create", async (t) => {
+  const cache = await tempDir(t, "cqa-cache-");
+  const old = path.join(cache, ".tmp-abandoned");
+  const recent = path.join(cache, ".tmp-running-elsewhere");
+  const foreign = path.join(cache, "someone-elses-folder");
+  for (const d of [old, recent, foreign]) await fs.mkdir(d);
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000);
+  await fs.utimes(old, twoHoursAgo, twoHoursAgo);
+
+  await new RepoRegistry({ defaultRoot: cache, policy: policy(cache), github: gh(), git: fakeGit().run }).resolve("acme/widgets");
+  const left = await fs.readdir(cache);
+  assert.ok(!left.includes(".tmp-abandoned"));
+  assert.ok(left.includes(".tmp-running-elsewhere"));
+  assert.ok(left.includes("someone-elses-folder"));
+});
+
+// ---------- execGit: the real process runner ----------
+
+// Node itself stands in for git, so these run anywhere without git or a network.
+const node = execGit(process.execPath);
+const run = (script: string, timeoutMs = 10_000) => node(["-e", script], { env: process.env, timeoutMs });
+
+test("execGit returns stdout, and reports the last line of stderr on failure", async () => {
+  assert.equal(await run("process.stdout.write('ok')"), "ok");
+  await assert.rejects(
+    run("console.error('Cloning into x...'); console.error('fatal: repository not found'); process.exit(128)"),
+    /^Error: fatal: repository not found$/,
+  );
+});
+
+test("execGit stops a process that runs too long", async () => {
+  await assert.rejects(run("setTimeout(() => {}, 10_000)", 200), /the download took too long/);
 });

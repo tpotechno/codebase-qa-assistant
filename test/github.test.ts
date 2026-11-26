@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { GitHubClient, StaleHeadError, extractHeadSha, formatPrDiff, isGeneratedFile, formatPrSummary, neutralizeMentions, parsePatch, parsePrRef } from "../src/github.ts";
-import { HEAD_SHA, PATCH, fakeGitHub } from "./fixtures/fake-github.ts";
+import { DEV_SHA, HEAD_SHA, PATCH, fakeGitHub } from "./fixtures/fake-github.ts";
 
 const ref = { owner: "acme", repo: "widgets", number: 7 };
 
@@ -192,4 +192,22 @@ test("postReview neutralizes mentions in the body and inline comments", async ()
   const sent = gh.requests.find((x) => x.method === "POST")!.body;
   assert.equal(sent.body, "Summary for `@boss`");
   assert.equal(sent.comments[0].body, "ping `@team`");
+});
+
+test("getRepo returns size, default branch and visibility; getCommitSha resolves a branch", async () => {
+  const gh = fakeGitHub({ repoSizeKb: 2048, privateRepo: true });
+  const client = new GitHubClient({ token: "t", fetch: gh.fetch });
+  assert.deepEqual(await client.getRepo("acme", "widgets"), {
+    fullName: "acme/widgets",
+    defaultBranch: "main",
+    sizeKb: 2048,
+    private: true,
+    url: "https://github.com/acme/widgets",
+  });
+  assert.equal(await client.getCommitSha("acme", "widgets", "dev"), DEV_SHA);
+  // Branch names with slashes are encoded as one path segment.
+  await assert.rejects(client.getCommitSha("acme", "widgets", "feature/x"), /GitHub 422/);
+  assert.equal(gh.requests.at(-1)!.path, "/repos/acme/widgets/commits/feature%2Fx");
+  assert.equal(gh.requests[0].auth, "Bearer t");
+  await assert.rejects(client.getRepo("acme", "nothing"), /GitHub 404.*check it exists/);
 });

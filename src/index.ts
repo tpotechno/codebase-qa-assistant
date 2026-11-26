@@ -8,20 +8,17 @@ import { repoRoot } from "./tools.ts";
 import { localToolProvider, toolProviderFromEnv, type ToolProvider } from "./tool-provider.ts";
 import { GitHubClient } from "./github.ts";
 import { RepoRegistry, repoPolicyFromEnv } from "./repos.ts";
+import { ASK_USAGE, AskUsageError, parseAskArgs } from "./ask-cli-lib.ts";
 
 // Optional "--repo <location>" (a folder path or a GitHub repo) picks the codebase;
 // everything else is the question.
-const args = process.argv.slice(2);
+let question: string;
 let repoArg: string | undefined;
-const repoAt = args.findIndex((a) => a === "--repo");
-if (repoAt !== -1) {
-  repoArg = args[repoAt + 1];
-  args.splice(repoAt, 2);
-}
-const question = args.join(" ").trim();
-
-if (!question || (repoAt !== -1 && !repoArg)) {
-  console.error('Usage: npm run ask -- [--repo <folder | owner/repo[@branch]>] "How does authentication work in this repo?"');
+try {
+  ({ question, repo: repoArg } = parseAskArgs(process.argv.slice(2)));
+} catch (e) {
+  if (!(e instanceof AskUsageError)) throw e;
+  console.error(`${e.message}\n${ASK_USAGE}`);
   process.exit(1);
 }
 if (!process.env.ANTHROPIC_API_KEY) {

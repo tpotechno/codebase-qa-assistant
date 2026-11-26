@@ -424,3 +424,19 @@ test("without a registry, only the built-in repo is offered", async () => {
   assert.deepEqual(cfg.repoChoice, { local: false, github: false });
   assert.equal((await postJson("/api/repo", { location: "acme/widgets" })).status, 403);
 });
+
+test("an unexpected failure opening a repo is a plain 500 that doesn't leak details", async (t) => {
+  const broken = {
+    choice: { local: true, github: true },
+    resolve: async () => {
+      throw new Error("EACCES: permission denied, mkdir '/secret/cache'");
+    },
+    lookup: () => undefined,
+    defaultRepo: () => ({ id: null, name: "x", label: "x", kind: "builtin" }),
+  } as unknown as RepoRegistry;
+  const app = await startApp({ repos: broken });
+  t.after(() => new Promise((r) => app.server.close(r)));
+  const res = await fetch(`${app.base}/api/repo`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "acme/widgets" }) });
+  assert.equal(res.status, 500);
+  assert.deepEqual(await res.json(), { error: "Could not open that codebase." });
+});

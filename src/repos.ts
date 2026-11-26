@@ -159,10 +159,14 @@ export interface RepoInfo {
 /** Runs git with an argument list (never through a shell) and returns stdout. */
 export type GitRunner = (args: string[], opts: { cwd?: string; env: NodeJS.ProcessEnv; timeoutMs: number }) => Promise<string>;
 
-export const defaultGit: GitRunner = (args, opts) =>
+/**
+ * A GitRunner backed by a real executable. `command` is "git" in normal use; tests point it
+ * at another program to check the error and timeout handling without git or a network.
+ */
+export const execGit = (command = "git"): GitRunner => (args, opts) =>
   new Promise((resolve, reject) => {
     execFile(
-      "git",
+      command,
       args,
       { cwd: opts.cwd, env: opts.env, timeout: opts.timeoutMs, windowsHide: true, maxBuffer: 4 * MB },
       (err, stdout, stderr) => {
@@ -174,6 +178,8 @@ export const defaultGit: GitRunner = (args, opts) =>
       },
     );
   });
+
+export const defaultGit: GitRunner = execGit();
 
 /**
  * Settings for every git call on an untrusted repository:
